@@ -1,0 +1,28 @@
+{
+    "aconSpecVersion": [
+        0,
+        0
+    ],
+    "layers": [
+        "sha384/de9d9395ea0a434af3ffd9ae13c9ecf0b8a209881a7a6785b5f5427c0b613bab5c8dbb37bb577ae484cf9d90b13ef5f3",
+        "sha384/86a35cf623699eaa741712b80d342a7aa350ceb445aaf7c550199737635619e25038027a72db005672ba30f47ea39204",
+        "sha384/badd0ba0ce62b587b507ad0d4451040f7c7d3bbbb81a572c6723f8cf8b7b081ea81b6b7c81cbfd31fa934ba77c809365"
+    ],
+    "aliases": {},
+    "entrypoint": [
+        "/lib/acon/entrypoint.d/start"
+    ],
+    "env": [
+        "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+    ],
+    "workingDir": "",
+    "uids": [],
+    "logFDs": [],
+    "writableFS": false,
+    "noRestart": false,
+    "signals": [],
+    "maxInstances": 1,
+    "policy": {
+        "rejectUnaccepted": false
+    }
+}

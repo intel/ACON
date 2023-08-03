@@ -1,0 +1,201 @@
+// Copyright (C) 2023 Intel Corporation
+// SPDX-License-Identifier: Apache-2.0
+
+syntax = "proto3";
+import "google/protobuf/empty.proto";
+
+package acon.grpc;
+
+message AddManifestRequest {
+    string manifest = 1;
+    bytes signature = 2;
+    bytes certificate = 3;
+}
+
+message AddManifestResponse {
+    string image_id = 1;
+    repeated string missing_layers = 2;
+}
+
+message AddBlobRequest {
+    // 00000001 sha256
+    // 00000010 sha384
+    // 00000100 sha512
+    uint32 alg = 1;
+    bytes data = 2;
+}
+
+message StartRequest {
+    string image_id = 1;
+    repeated string envs = 2;
+}
+
+message StartResponse {
+    uint32 container_id = 1;
+}
+
+message RestartRequest {
+    uint32 container_id = 1;
+    uint64 timeout = 2;
+}
+
+message RestartResponse {
+    uint32 container_id = 1;
+}
+
+message ExecRequest {
+    uint32 container_id = 1;
+    string command = 2;
+    uint64 timeout = 3;
+    repeated string arguments = 4;
+    repeated string envs = 5;
+    bytes stdin = 6;
+    uint64 capture_size = 7;
+}
+
+message ExecResponse {
+    bytes stdout = 1;
+    bytes stderr = 2;
+}
+
+message InspectRequest {
+    uint32 container_id = 1;
+}
+
+message InspectResponse {
+    repeated ContainerInfo info = 1;
+}
+
+message ContainerInfo {
+    uint32 container_id = 1;
+    uint32 state = 2;
+    int32 wstatus = 3;
+    string image_id = 4;
+    string exe_path = 5;
+}
+
+message ReportRequest {
+    uint64 nonce_lo = 1;
+    uint64 nonce_hi = 2;
+}
+
+message MrLog {
+    repeated string logs = 1;
+}
+
+message ReportResponse {
+    bytes report = 1;
+    map<uint32, MrLog> mrlog = 2;
+    string attestation_data = 3;
+}
+
+message GetManifestRequest {
+    string image_id = 1;
+}
+
+message GetManifestResponse {
+    string manifest = 1;
+    bytes certificate = 2;
+}
+
+service AconService {
+    // Accepts and measures a Manifest.
+    //
+    // AddManifest determines the acceptability of the supplied Manifest, and if accepted,
+    // measures and then stores the manifest.
+    //
+    // A Manifest must meet the following requirements to be accepted into a TD.
+    // 1. Must be signed properly.
+    // 2. Must not reject any existing Images.
+    // 3. Must not be rejected by any existing Images.
+    //
+    // On success, returns the hash value of the manifest and the missing layers.
+    // On failure, returns the specified error.
+    rpc AddManifest(AddManifestRequest) returns (AddManifestResponse);
+
+    // Not receive any manifests after finalization.
+    //
+    // On success, returns OK.
+    // On failure, returns the specified error.
+    rpc Finalize(google.protobuf.Empty) returns (google.protobuf.Empty);
+
+
+    // Loads a blob (containing a FS layer) into the TD.
+    //
+    // AddBlob loads an arbitrary blob into the TD. In the current spec, blobs must be in
+    // (uncompressed) TAR format.
+    //
+    // On success, returns OK.
+    // On failure, returns the specified error.
+    rpc AddBlob(AddBlobRequest) returns (google.protobuf.Empty);
+
+
+    // Starts a new container of an Image.
+    //
+    // Start creates a new Container of the Image specified by image_id, which is usually
+    // returned by AddManifest.
+    //
+    // On success, returns the unique identifier of the new Container.
+    // On failure, returns the specified error.
+    rpc Start(StartRequest) returns (StartResponse);
+
+    // Restarts an existing container.
+    //
+    // Restarts starts an exited Container or restarts a running Conainer specified by
+    // container_id, which is usually returned by Start.
+    // If the value of noRestart in the corresponding manifest is true, the container
+    // can't be restarted.
+    //
+    // On success, returns OK.
+    // On failure, returns the specified error.
+    rpc Restart(RestartRequest) returns (google.protobuf.Empty);
+
+    // Executes a public entrypoint in an existing Container.
+    //
+    // When timeout is non-zero, Exec executes the entrypoint in batch mode. It feeds the
+    // entrypoint's stdin with the bytes passed in via stdin (of ExecRequest), and captures
+    // stdout and stderr into stdout and stderr (of ExecResponse), respectively. timeout is
+    // the duration (in seconds) for which Exec should wait - i.e., Exec returns when the
+    // entrypoint process terminates or after timeout has elapsed, depending on which comes first.
+    // In the case the entrypoint cannot terminate with timeout, it will continue running, but
+    // further outputs to stdout and stderr will be discarded.
+    //
+    // When timeout is 0 (zero), Exec executes the entrypoint in interactive mode by allocating
+    // and attaching a new pseudo-terminal to the entrypoint process. In this mode, Exec returns
+    // immediately after the entrypoint process has started. stdin (of ExecRequest) is ignored,
+    // while stdout and stderr (of ExecResponse) are not used. If the TD was launched in interactive
+    // mode, the user can bring the pseudo-terminal to foreground for interacting with the entrypoint
+    // process.
+    //
+    // On failure, returns the specified error.
+    rpc Exec(ExecRequest) returns (ExecResponse);
+
+    // Retrieves information of the specified Containers.
+    //
+    // container_id specifies the Container whose status to be retrieved. If container_id is 0 (zero),
+    // the status of all Container's will be returned.
+    //
+    // On success, returns an array of ContainerInfo entries.
+    // On failure, returns the specified error.
+    rpc Inspect(InspectRequest) returns (InspectResponse);
+
+    // Returns a TDREPORT, along with measurement logs and additional attestation data attached by
+    // Containers.
+    //
+    // On input, nonce_lo and nonce_hi allow the caller to associate a 128-bit nonce to the report
+    // for replay protection.
+    // On output, report contains the TDREPORT. Its 64-byte REPORTDATA field is constructed as
+    // ACOND_NONCE || sha384(ACOND_NONCE || REQUESTOR_NONCE || attestation_data)
+    //
+    // On success, returns a TDREPORT.
+    // On error, returns the specified error.
+    rpc Report(ReportRequest) returns (ReportResponse);
+
+    // Retrieves the specified manifest.
+    //
+    // Returns the manifest and its signing certificate for the Image identified by image_id.
+    //
+    // On success, returns the manifest and its signing certificate.
+    // On error, returns the specified error.
+    rpc GetManifest(GetManifestRequest) returns (GetManifestResponse);
+}

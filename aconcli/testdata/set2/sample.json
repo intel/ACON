@@ -1,0 +1,50 @@
+{
+  "layers": [
+    "signers/sha224/72a802570f2a1759d33e8297f7cebf9c8fb947db8930143ff313b142/SomeSharedLayer:2",
+    "sha256/8d3ac3489996423f53d6087c81180006263b79f206d3fdec9e66f0e27ceb8759",
+    "sha384/8bf8dbf9f3c6e29660adf60f0eff64e6f2d47bf789d848386e6d2a644d5cf047d2bc06778f88e74f917a2dae41f641b8",
+    "sha256/fe4b5357dae419c2784d35586ccb721a621ba82756022889b9f49f34b5dd5b06"
+  ],
+  "aliases": {
+    "contents": {
+      "sha256/8d3ac3489996423f53d6087c81180006263b79f206d3fdec9e66f0e27ceb8759": [
+        "SharedLayerA:1",
+        "SharedLayerA:0"
+      ],
+      "sha224/22dde86581f879abc2e77f1fff4a9da0654f846bc2744fe9ad361cb9": [
+        "SharedLayerB:0"
+      ],
+      "sha256/fe4b5357dae419c2784d35586ccb721a621ba82756022889b9f49f34b5dd5b06": [
+        "SharedLayerD:0"
+      ],
+      "signers/sha224/72a802570f2a1759d33e8297f7cebf9c8fb947db8930143ff313b142/SomeSharedLayer:2": [
+        "SharedLayerC:2",
+        "SharedLayerC:1",
+        "SharedLayerC:0"
+      ]
+    },
+    "self": {
+      ".": [
+        "SomeProduct:2",
+        "SomeProduct:1",
+        "SomeProduct:0"
+      ]
+    }
+  },
+  "runtime": [
+    "exec"
+  ],
+  "policy": {
+    "accepts": [
+      "signers/sha256/c4c56a4bfe7a48ca831492c67cd68537ba46fd89876262f9a5ee5547466a94a8/ProductA:2",
+      "signers/sha256/c4c56a4bfe7a48ca831492c67cd68537ba46fd89876262f9a5ee5547466a94a8/ProductB:1",
+      "signers/sha224/72a802570f2a1759d33e8297f7cebf9c8fb947db8930143ff313b142/ProductC:3",
+      "sha384/4c1c3713b0c3d7fd36750e51f28c8f123dfcad9e506cbfd5d06432cdf2df4194327442571e805ca5b46c7ab151ead3cd"
+    ],
+    "rejects": true
+  },
+  "attributes": {
+    "product": "SomeProduct",
+    "svn": 2
+  }
+}

@@ -1,0 +1,4 @@
+# Copyright (C) 2023 Intel Corporation
+
+[build]
+target = "x86_64-unknown-linux-musl"
