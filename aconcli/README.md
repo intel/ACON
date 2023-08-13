@@ -18,10 +18,6 @@ To clean up:
 
 `$ go clean`
 
-## Running the aconcli tool
-
-All supported `aconcli` usages and detailed descriptions can be found [here](https://github.com/intel-innersource/frameworks.security.confidential-computing.tee.td-enclave/blob/master/doc/Utility.md).
-
 ## About the sample ACON-VM start sript
 
 With `aconcli`, a sample ACON-VM start script is provided. This is used by `aconcli` to launch a ACON-VM. Environment variables are used in this script file to set up the virtual machine. Users can provide their own start script while adhering to the semantics of these environment variables.
