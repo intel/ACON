@@ -20,7 +20,15 @@ To clean up:
 
 ## Running the aconcli tool
 
-All supported `aconcli` usages and detailed descriptions can be found [here](https://github.com/intel-innersource/frameworks.security.confidential-computing.tee.td-enclave/blob/master/doc/Utility.md).
+To see available commands run:
+```
+aconcli -h
+```
+
+The general format of aconcli commands is:
+```
+aconcli [GLOBAL_OPTION]... COMMAND [COMMAND_OPTION]...
+```
 
 ## About the sample ACON-VM start sript
 
