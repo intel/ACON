@@ -21,7 +21,7 @@ tar_container() {
     local readonly CID=$(docker create $CONTAINER)
     test -n "$CID" && {
         for p in "$@"; do
-            docker cp -q $CID:$p -
+            docker cp $CID:$p -
         done
         docker rm $CID
     } || return 3
