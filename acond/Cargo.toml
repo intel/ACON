@@ -40,5 +40,8 @@ full = ["interactive"]
 interactive = []
 
 [profile.release]
+opt-level = "s"
+strip = true
 lto = true
-panic = 'abort'
+panic = "abort"
+codegen-units = 1
