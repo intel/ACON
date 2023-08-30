@@ -1,0 +1,22 @@
+name: Small TCB builds
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v3
+    - name: Prepare alpine dockerfile
+      run: echo -e "From rust:alpine\nRUN apk add musl-dev openssl-dev openssl-libs-static protobuf-dev git && git clone https://github.com/intel/ACON.git\nRUN cd ACON/acond && CARGO_BUILD_RUSTFLAGS=-Crelocation-model=static cargo build --release --target x86_64-unknown-linux-musl && cargo clean && CARGO_BUILD_RUSTFLAGS=-Ctarget-feature=-crt-static cargo build --release" >> Dockerfile
+    - name: Alpine build
+      run: docker build --progress=plain -t acond .
