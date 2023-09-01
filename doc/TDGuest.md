@@ -49,12 +49,12 @@ make INSTALL_PATH=/path/to/target/dir install
 
 [initrd][initrd] is a *CPIO* archive that contains a directory tree to be mounted at `/` when the kernel boots, and must contain the executable file `/init` to be launched by the kernel as the first user mode process.
 
-Building an initrd image is cumbersome, therefore a few shell functions are provided in [`initrd-helper-funcs.sh`](../scripts/initrd-helper-funcs.sh) to assist users in creating/customizing initrd images. Details of those shell functions are provided [later](#customizing-initial-ram-disk) in this guide.
+Building an initrd image is cumbersome, therefore a few shell functions are provided in [`acon-build.env`](../scripts/acon-build.env) to assist users in creating/customizing initrd images. Details of those shell functions are provided [later](#customizing-initial-ram-disk) in this guide.
 
 To include those functions in the current shell (only `sh`/`bash` are supported for now) environment, simply source the script like below.
 
 ```sh
-source /path/to/acon_source/scripts/initrd-helper-funcs.sh
+source /path/to/acon_source/scripts/acon-build.env
 ```
 
 The rest of this section demonstrates the steps for building/customizing initrd images with two examples based on [`busybox`](#busybox-based-initrd) and [`alpine`](#alpine-based-initrd), respectively.
@@ -74,7 +74,7 @@ Here are the steps to create an initrd from the [`busybox` docker container imag
 2. Source the help script mentioned above.
 
    ```sh
-   source /path/to/acon_source/scripts/initrd-helper-funcs.sh
+   source /path/to/acon_source/scripts/acon-build.env
    ```
 
 3. Invoke `get_initrd` to create the initrd image - The command below will create a new directory named `bbox/` along with a *CPIO* archive named `initrd-bbox.cpio`, in the current directory. `initrd-bbox.cpio` is the initrd image.
@@ -454,7 +454,7 @@ An initrd image must be passed to the kernel (through `-initrd` *QEMU* command l
 
 initrd is a *CPIO* archive, which could be created using the standard Linux utility `cpio`.
 
-[`initrd-helper-funcs.sh`](../scripts/initrd-helper-funcs.sh) provides *bash* functions to assist developers in creating and customizing initrd images. Simply source the script (i.e., `source path/to/acon/source/scripts/initrd-helper-funcs.sh`) to bring in those functions in the current shell.
+[`acon-build.env`](../scripts/acon-build.env) provides *bash* functions to assist developers in creating and customizing initrd images. Simply source the script (i.e., `source path/to/acon/source/scripts/acon-build.env`) to bring in those functions in the current shell.
 
 The table below summarizes those functions.
 
@@ -463,7 +463,7 @@ The table below summarizes those functions.
 |[`gen_initrd`](#gen_initrd)|Generates an initrd image from a `docker` container image.
 |[`create_initrd`](#create_initrd)|Generates an initrd image from a to-be-initrd directory.
 |[`gen_init`](#gen_init)|Generates the executable script `/init` and necessary supporting files in the specified (to-be-initrd) directory.
-|[`abs2rellinks`](#abs2rellinks)|Converts symlinks of absolute paths to symlinks of relative paths.
+|[`abs2relinks`](#abs2relinks)|Converts symlinks of absolute paths to symlinks of relative paths.
 |[`hard2symlinks`](#hard2symlinks)|Replaces hard links of a specified file with symbolic links.
 |[`tar_container`](#tar_container)|Creates a *TAR* archive from a container image.
 |[`cpio_initrd`](#cpio_initrd)|Creates an initrd-compatible *CPIO* archive from a directory.
@@ -583,11 +583,11 @@ does all the following in one shot:
 - Generates `$PWD/alpine/init` along with its dependencies.
 - Sets *mtime* of all files under `$PWD/alpine/` to the default, and generates the final compressed initrd image - `$PWD/initrd-alpine.cpio.xz`.
 
-### abs2rellinks
+### abs2relinks
 
-**Synopsis:** `abs2rellinks ROOT`
+**Synopsis:** `abs2relinks ROOT`
 
-`abs2rellinks` replaces all symlinks of absolute paths with symlinks of relative paths, with `/` mapped to `ROOT`.
+`abs2relinks` replaces all symlinks of absolute paths with symlinks of relative paths, with `/` mapped to `ROOT`.
 
 ### hard2symlinks
 
