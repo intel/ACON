@@ -83,6 +83,14 @@ func Start(sc pb.AconServiceClient, imageId string, env []string) (uint32, error
 	return r.GetContainerId(), nil
 }
 
+func Kill(sc pb.AconServiceClient, cid uint32, signum int32) error {
+	ctx, cancel := context.WithTimeout(context.Background(), defaultServiceTimeout)
+	defer cancel()
+
+	_, err := sc.Kill(ctx, &pb.KillRequest{ContainerId: cid, SignalNum: signum})
+	return err
+}
+
 func Restart(sc pb.AconServiceClient, cid uint32, timeout uint64) error {
 	ctx, cancel := context.WithTimeout(context.Background(), defaultServiceTimeout+time.Duration(timeout)*time.Second)
 	defer cancel()
