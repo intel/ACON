@@ -249,7 +249,7 @@ impl Container {
 
         #[cfg(not(feature = "interactive"))]
         if _timeout == 0 {
-            Err(anyhow!(utils::ERR_RPC_NOT_SUPPORT_IA_MODE))
+            return Err(anyhow!(utils::ERR_RPC_INVALID_TIMEOUT));
         } else {
             let (crdstdin, pwrstdin) = unistd::pipe()?;
             fcntl::fcntl(pwrstdin, FcntlArg::F_SETFD(FdFlag::FD_CLOEXEC))?;
@@ -390,7 +390,11 @@ fn create_child(fork_args: &ForkArgs) -> Result<Pid> {
             unistd::write(cwrfd, &i32::from(pid).to_be_bytes())?;
             process::exit(0);
         }
-        Err(_) => Err(anyhow!(utils::ERR_RPC_FAIL_FORK)),
+        Err(errno) => {
+            return Err(anyhow!(
+                utils::ERR_RPC_SYSTEM_ERROR.replace("{}", format!("{}", errno).as_str())
+            ));
+        }
     }
 }
 
@@ -463,8 +467,10 @@ fn run_child(fork_args: &ForkArgs, slave: Option<i32>, cwrfd: i32, crdfd: i32) -
             return Ok(child);
         }
         Ok(ForkResult::Child) => (),
-        Err(_) => {
-            return Err(anyhow!(utils::ERR_RPC_FAIL_FORK));
+        Err(errno) => {
+            return Err(anyhow!(
+                utils::ERR_RPC_SYSTEM_ERROR.replace("{}", format!("{}", errno).as_str())
+            ));
         }
     }
 

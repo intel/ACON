@@ -47,7 +47,7 @@ impl AconService for TDAconService {
         let mut pod = ref_pod.write().await;
 
         if pod.finalized {
-            return Err(Status::permission_denied(utils::ERR_RPC_REJECT_MANIFEST));
+            return Err(Status::permission_denied(utils::ERR_RPC_MANIFEST_FINALIZED));
         }
 
         let verified = utils::verify_signature(manifest_bytes, signature_bytes, signer_bytes)
@@ -94,7 +94,9 @@ impl AconService for TDAconService {
             .is_manifest_accepted(&image)
             .map_err(|e| Status::unknown(e.to_string()))?;
         if !is_accepted {
-            return Err(Status::permission_denied(utils::ERR_RPC_REJECT_MANIFEST));
+            return Err(Status::permission_denied(
+                utils::ERR_RPC_INCOMPATIBLE_POLICY,
+            ));
         }
 
         utils::create_alias_link(&image).map_err(|e| Status::unknown(e.to_string()))?;
@@ -121,7 +123,7 @@ impl AconService for TDAconService {
         let mut pod = ref_pod.write().await;
 
         if pod.finalized {
-            return Err(Status::permission_denied(utils::ERR_RPC_REJECT_MANIFEST));
+            return Err(Status::permission_denied(utils::ERR_RPC_MANIFEST_FINALIZED));
         }
 
         utils::measure_image(None).map_err(|e| Status::unknown(e.to_string()))?;
@@ -305,9 +307,7 @@ impl AconService for TDAconService {
         }
 
         if !utils::start_with_uppercase(command) {
-            return Err(Status::invalid_argument(
-                utils::ERR_RPC_INVALID_COMMAND.replace("{}", command),
-            ));
+            return Err(Status::invalid_argument(utils::ERR_RPC_PRIVATE_ENTRYPOINT));
         }
 
         let ref_pod = self.pod.clone();
@@ -317,7 +317,7 @@ impl AconService for TDAconService {
             .ok_or_else(|| Status::invalid_argument(utils::ERR_RPC_INVALID_CONTAINER_ID))?;
 
         if !container.is_running() {
-            return Err(Status::unknown(utils::ERR_RPC_CONTAINER_EXITED));
+            return Err(Status::unknown(utils::ERR_RPC_CONTAINER_TERMINATED));
         }
 
         let (stdout, stderr) = container
@@ -343,7 +343,7 @@ impl AconService for TDAconService {
             .ok_or_else(|| Status::invalid_argument(utils::ERR_RPC_INVALID_CONTAINER_ID))?;
 
         if !container.is_running() {
-            return Err(Status::unknown(utils::ERR_RPC_CONTAINER_EXITED));
+            return Err(Status::unknown(utils::ERR_RPC_CONTAINER_TERMINATED));
         }
 
         let image = pod

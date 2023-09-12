@@ -30,17 +30,18 @@ use std::{
 use tar::Archive;
 
 pub const REPORT_API_VERSION: &str = "1.0.0";
-pub const ERR_CFG_INVALID_VSOCK_PORT: &str = "Invalid kernel parameter: vsock port";
-pub const ERR_CFG_INVALID_TCPIP_PORT: &str = "Invalid kernel parameter: TCP/IP port";
-pub const ERR_CFG_INVALID_TIMEOUT: &str = "Invalid kernel parameter: timeout";
-pub const ERR_RPC_REJECT_MANIFEST: &str = "Manifest rejected according to the launch policy";
+pub const ERR_CFG_INVALID_VSOCK_PORT: &str = "Invalid kernel cmdline parameter - acond.vsock_port";
+pub const ERR_CFG_INVALID_TCPIP_PORT: &str = "Invalid kernel cmdline parameter - acond.tcp_port";
+pub const ERR_CFG_INVALID_TIMEOUT: &str = "Invalid kernel cmdline parameter - acond.timeout";
+pub const ERR_RPC_INCOMPATIBLE_POLICY: &str = "Incompatible polices";
+pub const ERR_RPC_MANIFEST_FINALIZED: &str = "Manifests finalized";
 pub const ERR_RPC_INVALID_SIGNATURE: &str = "Invalid digital signature";
 pub const ERR_RPC_INVALID_CERTIFICATE: &str = "Invalid certificate";
 pub const ERR_RPC_INVALID_HASH_ALGORITHM: &str = "Invalid hash algorithm";
-pub const ERR_RPC_REJECT_BLOB: &str = "Blob rejected as no manifests require the blob";
+pub const ERR_RPC_REJECT_BLOB: &str = "No referencing manifest";
 pub const ERR_RPC_INVALID_IMAGE_ID: &str = "Invalid Image ID";
 pub const ERR_RPC_INVALID_CONTAINER_ID: &str = "Invalid Container ID";
-pub const ERR_RPC_CONTAINER_EXITED: &str = "Container terminated";
+pub const ERR_RPC_CONTAINER_TERMINATED: &str = "Container terminated";
 pub const ERR_RPC_CONTAINER_RESTART_TIMEOUT: &str = "Timeout restarting container";
 pub const ERR_RPC_CONTAINER_NOT_ALLOW_RESTART: &str = "Restarting container not allowed";
 pub const ERR_RPC_CONTAINER_NOT_ALLOW_KILL: &str = "Signal not allowed";
@@ -48,13 +49,12 @@ pub const ERR_RPC_NO_IMAGES: &str = "No images in current TD";
 pub const ERR_RPC_INVALID_LPOLICY_FORMAT: &str = "Invalid launch policy format";
 pub const ERR_RPC_INVALID_MALIAS_FORMAT: &str = "Invalid manifest alias format";
 #[cfg(not(feature = "interactive"))]
-pub const ERR_RPC_NOT_SUPPORT_IA_MODE: &str = "Interactive mode not supported";
-pub const ERR_RPC_FAIL_FORK: &str = "Fail to execute fork";
+pub const ERR_RPC_INVALID_TIMEOUT: &str = "Invalid timeout";
 pub const ERR_RPC_BUFFER_EXCEED: &str = "Stdin buffer size exceeds capture size";
-pub const ERR_RPC_INVALID_COMMAND: &str = "Command not start with a capital letter";
+pub const ERR_RPC_PRIVATE_ENTRYPOINT: &str = "Private entry point";
 pub const ERR_RPC_SYSTEM_ERROR: &str = "System error, errno: {}";
-pub const ERR_IPC_INVALID_REQ_FORMAT: &str = "Invalid request struct format";
-pub const ERR_IPC_NOT_SUPPORT_REQ: &str = "Request not supported";
+pub const ERR_IPC_INVALID_REQUEST: &str = "Invalid structure format";
+pub const ERR_IPC_NOT_SUPPORTED: &str = "Request not supported";
 
 const ATTEST_DEV_PATH: &str = "/dev/tdx_guest";
 const STORAGE_ROOT: &str = "/run/acond";
