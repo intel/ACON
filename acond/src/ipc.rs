@@ -165,7 +165,7 @@ async fn handle_request(stream: UnixStream, tx: mpsc::Sender<Request>) -> Result
         match stream.try_read(&mut msg_hdr_bytes) {
             Ok(n) => {
                 if n != msg_hdr_bytes.len() {
-                    resp_bytes = Some(utils::ERR_IPC_INVALID_REQ_FORMAT.as_bytes().to_vec());
+                    resp_bytes = Some(utils::ERR_IPC_INVALID_REQUEST.as_bytes().to_vec());
                 } else {
                     msg_hdr = bincode::deserialize(&msg_hdr_bytes)?;
                 }
@@ -184,7 +184,7 @@ async fn handle_request(stream: UnixStream, tx: mpsc::Sender<Request>) -> Result
             match stream.try_read(&mut data) {
                 Ok(n) => {
                     if n != data.len() {
-                        resp_bytes = Some(utils::ERR_IPC_INVALID_REQ_FORMAT.as_bytes().to_vec());
+                        resp_bytes = Some(utils::ERR_IPC_INVALID_REQUEST.as_bytes().to_vec());
                     } else {
                         msg_hdr_bytes.append(&mut data);
                     }
@@ -314,7 +314,7 @@ async fn dispatch_request(request: &Request, service: &AconService) -> Result<Ve
             }
         }
 
-        _ => Err(anyhow!(utils::ERR_IPC_NOT_SUPPORT_REQ)),
+        _ => Err(anyhow!(utils::ERR_IPC_NOT_SUPPORTED)),
     }
 }
 

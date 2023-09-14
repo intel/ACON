@@ -39,10 +39,6 @@ message RestartRequest {
     uint64 timeout = 2;
 }
 
-message RestartResponse {
-    uint32 container_id = 1;
-}
-
 message ExecRequest {
     uint32 container_id = 1;
     string command = 2;
@@ -56,6 +52,11 @@ message ExecRequest {
 message ExecResponse {
     bytes stdout = 1;
     bytes stderr = 2;
+}
+
+message KillRequest {
+    uint32 container_id = 1;
+    int32 signal_num = 2;
 }
 
 message InspectRequest {
@@ -169,6 +170,15 @@ service AconService {
     //
     // On failure, returns the specified error.
     rpc Exec(ExecRequest) returns (ExecResponse);
+
+    // Sends signal which must exist in the corresponding manifest to an existing container.
+    //
+    // container_id specifies the Container to which the specified sinal will be sent. The signal must
+    // exist in the corresponding manifest. Otherwise, it fails with errors.
+    //
+    // On success, returns OK.
+    // On failure, returns the specified error.
+    rpc Kill(KillRequest) returns (google.protobuf.Empty);
 
     // Retrieves information of the specified Containers.
     //
