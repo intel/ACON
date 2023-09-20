@@ -17,6 +17,14 @@ jobs:
     steps:
     - uses: actions/checkout@v3
     - name: Prepare alpine dockerfile
-      run: echo -e "From rust:alpine\nRUN apk add musl-dev openssl-dev openssl-libs-static protobuf-dev git && git clone https://github.com/intel/ACON.git\nRUN cd ACON/acond && CARGO_BUILD_RUSTFLAGS=-Crelocation-model=static cargo build --release --target x86_64-unknown-linux-musl && cargo clean && CARGO_BUILD_RUSTFLAGS=-Ctarget-feature=-crt-static cargo build --release" >> Dockerfile
+      shell: cp {0} Dockerfile
+      run: |
+        FROM rust:alpine
+        COPY . ACON
+        RUN apk add musl-dev openssl-dev openssl-libs-static protobuf-dev git
+        RUN cd ACON/acond && \
+          CARGO_BUILD_RUSTFLAGS=-Crelocation-model=static cargo build --release --target x86_64-unknown-linux-musl && \
+          cargo clean && \
+          CARGO_BUILD_RUSTFLAGS=-Ctarget-feature=-crt-static cargo build --release
     - name: Alpine build
       run: docker build --progress=plain -t acond .
