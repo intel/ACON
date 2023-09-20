@@ -20,8 +20,8 @@ jobs:
       shell: cp {0} Dockerfile
       run: |
         FROM rust:alpine
+        RUN apk add --no-cache musl-dev openssl-dev openssl-libs-static protobuf-dev git
         COPY . ACON
-        RUN apk add musl-dev openssl-dev openssl-libs-static protobuf-dev git
         RUN cd ACON/acond && \
           CARGO_BUILD_RUSTFLAGS=-Crelocation-model=static cargo build --release --target x86_64-unknown-linux-musl && \
           cargo clean && \
