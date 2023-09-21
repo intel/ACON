@@ -16,8 +16,8 @@ jobs:
 
     steps:
     - uses: actions/checkout@v3
-    - name: Prepare Dockerfile
-      shell: cp {0} Dockerfile
+    - name: Debian builds
+      shell: docker build --progress=plain -t acond -f {0} .
       run: |
         FROM rust:slim
         RUN apt update -y && \
@@ -26,5 +26,3 @@ jobs:
         COPY . ACON
         RUN cd ACON/acond && \
           CARGO_BUILD_RUSTFLAGS=-Ctarget-feature=-crt-static cargo build --release
-    - name: Debian builds
-      run: docker build --progress=plain -t acond .
