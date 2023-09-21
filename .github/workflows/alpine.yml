@@ -16,8 +16,8 @@ jobs:
 
     steps:
     - uses: actions/checkout@v3
-    - name: Prepare alpine dockerfile
-      shell: cp {0} Dockerfile
+    - name: Alpine build
+      shell: docker build --progress=plain -t acond -f {0} .
       run: |
         FROM rust:alpine
         RUN apk add --no-cache musl-dev openssl-dev openssl-libs-static protobuf-dev git
@@ -26,5 +26,3 @@ jobs:
           CARGO_BUILD_RUSTFLAGS=-Crelocation-model=static cargo build --release --target x86_64-unknown-linux-musl && \
           cargo clean && \
           CARGO_BUILD_RUSTFLAGS=-Ctarget-feature=-crt-static cargo build --release
-    - name: Alpine build
-      run: docker build --progress=plain -t acond .
