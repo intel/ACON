@@ -1,14 +1,8 @@
 // Copyright (C) 2023 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::{
-    image::AttestDataValue,
-    pod::Pod,
-    utils::{self, NUM_RTMRS, REPORT_SIZE},
-};
+use crate::{image::AttestDataValue, pod::Pod, report, utils};
 use anyhow::{anyhow, Result};
-
-use serde::{Deserialize, Serialize};
 use std::{
     fs::{self, Permissions},
     io::ErrorKind,
@@ -24,63 +18,72 @@ use tokio::{
 };
 
 #[repr(C)]
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy)]
 struct AconMessageHdr {
     command: i32, // even = request; odd = response; negative = error
     size: u32,    // size of the whole request/response
 }
 
 #[repr(C)]
-#[derive(Serialize, Deserialize, Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 struct AconMessageErr {
     header: AconMessageHdr, // command = -Exxx, as defintion in Linux
     request: i32,           // original request code
 }
 
 #[repr(C)]
-#[derive(Serialize, Deserialize, Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 struct AconGetReportReq {
     header: AconMessageHdr, // command = 0
+    is_quote: bool,
     nonce: [u64; 2],
     data_type: i32, // 0 = no data; 1 = binary; 2 = string; others = reserved
 }
 
 #[repr(C)]
-#[derive(Serialize, Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 struct AconGetReportRsp {
     header: AconMessageHdr, // command = 1
-    #[serde(with = "serde_arrays")]
-    report: [u8; REPORT_SIZE],
     rtmr_count: i32,
+    report: [u8; report::REPORT_SIZE],
+    quote_offset: i32,
     attestation_json_offset: i32,
 }
 
 #[repr(C)]
-#[derive(Serialize, Deserialize, Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 struct AconSetAttestationDataReq {
     header: AconMessageHdr, // command = 2
     data_type: i32,         // Same definition as AconGetReportReq.dataType
 }
 
 #[repr(C)]
-#[derive(Serialize, Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 struct AconSetAttestationDataRsp {
     header: AconMessageHdr, // command = 3
 }
 
-#[allow(unused)]
+#[repr(C)]
 union AconReq {
     header: AconMessageHdr,
     get_report: AconGetReportReq,
     set_attestation_data: AconSetAttestationDataReq,
 }
 
+#[repr(C)]
 #[allow(unused)]
 union AconRsp {
     header: AconMessageHdr,
     error: AconMessageErr,
     get_report: AconGetReportRsp,
     set_attestation_data: AconSetAttestationDataRsp,
+}
+
+struct Request {
+    command: i32,
+    bytes: Vec<u8>,
+    uid: u32,
+    resp_tx: oneshot::Sender<Vec<u8>>,
 }
 
 struct AconService {
@@ -91,10 +94,11 @@ impl AconService {
     async fn get_report(
         &self,
         uid: u32,
+        is_quote: bool,
         nonce: [u64; 2],
         dtype: i32,
         data: String,
-    ) -> Result<(i32, [u8; REPORT_SIZE], String)> {
+    ) -> Result<(i32, [u8; report::REPORT_SIZE], Option<Vec<u8>>, String)> {
         let ref_pod = self.pod.clone();
         let pod = ref_pod.read().await;
 
@@ -104,9 +108,14 @@ impl AconService {
             acond_nonce,
             Some((uid, AttestDataValue::DataValue { dtype, data })),
         )?;
-        let report = utils::get_report(&attest_data)?;
 
-        Ok((NUM_RTMRS, report, attest_data))
+        if is_quote {
+            let (report, quote) = report::get_quote(&attest_data)?;
+            Ok((report::NUM_RTMRS, report, Some(quote), attest_data))
+        } else {
+            let report = report::get_report(&attest_data)?;
+            Ok((report::NUM_RTMRS, report, None, attest_data))
+        }
     }
 
     async fn set_attestation_data(&self, uid: u32, dtype: i32, data: String) -> Result<()> {
@@ -120,99 +129,81 @@ impl AconService {
     }
 }
 
-struct Request {
-    command: i32,
-    bytes: Vec<u8>,
-    uid: u32,
-    resp_tx: oneshot::Sender<Vec<u8>>,
-}
-
-pub unsafe fn convert_attest_data(end_with_nul: bool, data: &[u8]) -> &str {
-    if end_with_nul {
-        let end = data.iter().position(|&c| c == b'\0').unwrap_or(data.len());
-
-        str::from_utf8_unchecked(&data[0..end])
-    } else {
-        str::from_utf8_unchecked(data)
+pub unsafe fn convert_attest_data(dtype: i32, data: &[u8]) -> &str {
+    match dtype {
+        1 => str::from_utf8_unchecked(data),
+        _ => {
+            let end = data.iter().position(|&c| c == b'\0').unwrap_or(data.len());
+            str::from_utf8_unchecked(&data[0..end])
+        }
     }
 }
 
-fn convert_error_bytes(command: i32, err: &str) -> Result<Vec<u8>> {
-    let mut err_bytes = err.as_bytes().to_vec();
+fn convert_error_bytes(command: i32, err: &str) -> Vec<u8> {
+    let err_bytes = err.as_bytes();
+    let err_bytes_offset = mem::size_of::<AconMessageErr>();
 
-    let msg_err = AconMessageErr {
-        header: AconMessageHdr {
-            command: -1,
-            size: err_bytes.len() as u32,
-        },
-        request: command,
-    };
+    let mut msg_err_bytes: Vec<u8> = vec![0; err_bytes_offset + err_bytes.len()];
+    let msg_err = msg_err_bytes.as_mut_ptr() as *mut AconMessageErr;
+    unsafe {
+        (*msg_err).header.command = -1; // Not know errno.
+        (*msg_err).header.size = msg_err_bytes.len() as u32;
+        (*msg_err).request = command;
+    }
 
-    let mut msg_err_bytes = bincode::serialize(&msg_err)?;
-    msg_err_bytes.append(&mut err_bytes);
+    for i in 0..err_bytes.len() {
+        msg_err_bytes[err_bytes_offset + i] = err_bytes[i];
+    }
 
-    Ok(msg_err_bytes)
+    msg_err_bytes
 }
 
 async fn handle_request(stream: UnixStream, tx: mpsc::Sender<Request>) -> Result<()> {
-    let mut resp_bytes: Option<Vec<u8>> = None;
-    let mut msg_hdr: AconMessageHdr = AconMessageHdr::default();
-    let mut msg_hdr_bytes = vec![0; mem::size_of::<AconMessageHdr>()];
+    let mut req_bytes: Vec<u8> = vec![0; mem::size_of::<AconReq>()];
+    let mut req_bytes_offset = 0;
+    let mut data_size = 0;
 
     loop {
         stream.readable().await?;
-
-        match stream.try_read(&mut msg_hdr_bytes) {
+        match stream.try_read(&mut req_bytes[req_bytes_offset..]) {
             Ok(n) => {
-                if n != msg_hdr_bytes.len() {
-                    resp_bytes = Some(utils::ERR_IPC_INVALID_REQUEST.as_bytes().to_vec());
-                } else {
-                    msg_hdr = bincode::deserialize(&msg_hdr_bytes)?;
+                if req_bytes_offset == 0 {
+                    data_size =
+                        unsafe { (*(req_bytes.as_mut_ptr() as *mut AconMessageHdr)).size as usize };
                 }
-                break;
+
+                if req_bytes_offset + n >= data_size {
+                    break;
+                }
+
+                req_bytes_offset += n;
+                req_bytes.resize(data_size, 0);
             }
             Err(ref e) if e.kind() == ErrorKind::WouldBlock => continue,
             Err(e) => return Err(e.into()),
         }
     }
 
-    if resp_bytes.is_none() {
-        loop {
-            let count = msg_hdr.size as usize - msg_hdr_bytes.len();
-            let mut data = vec![0; count];
+    let resp_bytes = {
+        if data_size < mem::size_of::<AconMessageHdr>() {
+            utils::ERR_IPC_INVALID_REQUEST.as_bytes().to_vec()
+        } else {
+            let (resp_tx, resp_rx) = oneshot::channel();
+            let request = Request {
+                command: unsafe { (*(req_bytes.as_mut_ptr() as *mut AconMessageHdr)).command },
+                bytes: req_bytes[0..data_size as usize].to_vec(),
+                uid: stream.peer_cred()?.uid(),
+                resp_tx,
+            };
 
-            match stream.try_read(&mut data) {
-                Ok(n) => {
-                    if n != data.len() {
-                        resp_bytes = Some(utils::ERR_IPC_INVALID_REQUEST.as_bytes().to_vec());
-                    } else {
-                        msg_hdr_bytes.append(&mut data);
-                    }
-                    break;
-                }
-                Err(ref e) if e.kind() == ErrorKind::WouldBlock => continue,
-                Err(e) => return Err(e.into()),
-            }
+            let _ = tx.send(request).await;
+            resp_rx.await?
         }
-    }
-
-    if resp_bytes.is_none() {
-        let (resp_tx, resp_rx) = oneshot::channel();
-        let request = Request {
-            command: msg_hdr.command,
-            bytes: msg_hdr_bytes,
-            uid: stream.peer_cred()?.uid(),
-            resp_tx,
-        };
-
-        let _ = tx.send(request).await;
-        resp_bytes = Some(resp_rx.await?);
-    }
+    };
 
     loop {
         stream.writable().await?;
-
-        match stream.try_write(resp_bytes.as_ref().unwrap()) {
+        match stream.try_write(&resp_bytes) {
             Ok(_) => return Ok(()),
             Err(ref e) if e.kind() == ErrorKind::WouldBlock => continue,
             Err(e) => return Err(e.into()),
@@ -220,7 +211,7 @@ async fn handle_request(stream: UnixStream, tx: mpsc::Sender<Request>) -> Result
     }
 }
 
-async fn monitor_request(pod: Arc<RwLock<Pod>>, mut rx: mpsc::Receiver<Request>) -> Result<()> {
+async fn monitor_request(pod: Arc<RwLock<Pod>>, mut rx: mpsc::Receiver<Request>) {
     let service = AconService { pod };
 
     loop {
@@ -230,8 +221,9 @@ async fn monitor_request(pod: Arc<RwLock<Pod>>, mut rx: mpsc::Receiver<Request>)
                     let _ = request.resp_tx.send(response);
                 }
                 Err(e) => {
-                    let err_bytes = convert_error_bytes(request.command, &e.to_string())?;
-                    let _ = request.resp_tx.send(err_bytes);
+                    let _ = request
+                        .resp_tx
+                        .send(convert_error_bytes(request.command, &e.to_string()));
                 }
             }
         }
@@ -241,76 +233,98 @@ async fn monitor_request(pod: Arc<RwLock<Pod>>, mut rx: mpsc::Receiver<Request>)
 async fn dispatch_request(request: &Request, service: &AconService) -> Result<Vec<u8>> {
     match request.command {
         0 => {
-            let get_report_req: AconGetReportReq =
-                bincode::deserialize(&request.bytes[0..mem::size_of::<AconGetReportReq>()])?;
-
-            let attest_data_type = get_report_req.data_type;
-            let attest_data = unsafe {
-                convert_attest_data(
-                    attest_data_type == 2,
-                    &request.bytes[mem::size_of::<AconGetReportReq>()..],
+            let (is_quote, attest_nonce, attest_data_type, attest_data) = unsafe {
+                let get_report_req = request.bytes.as_ptr() as *const AconGetReportReq;
+                (
+                    (*get_report_req).is_quote,
+                    (*get_report_req).nonce,
+                    (*get_report_req).data_type,
+                    convert_attest_data(
+                        (*get_report_req).data_type,
+                        &request.bytes[mem::size_of::<AconGetReportReq>()..],
+                    )
+                    .to_owned(),
                 )
-                .to_owned()
             };
 
             match service
                 .get_report(
                     request.uid,
-                    get_report_req.nonce,
+                    is_quote,
+                    attest_nonce,
                     attest_data_type,
                     attest_data,
                 )
                 .await
             {
-                Ok((rtmr_count, report, data)) => {
-                    let mut data_bytes = data.as_bytes().to_vec();
-                    let get_report_resp = AconGetReportRsp {
-                        header: AconMessageHdr {
-                            command: request.command + 1,
-                            size: (mem::size_of::<AconGetReportRsp>() + data_bytes.len()) as u32,
-                        },
-                        report,
-                        rtmr_count,
-                        attestation_json_offset: mem::size_of::<AconGetReportRsp>() as i32,
-                    };
+                Ok((rtmr_count, report, quote, attest_data)) => {
+                    let attest_data_bytes: &[u8] = attest_data.as_bytes();
+                    let quote_offset = mem::size_of::<AconGetReportRsp>();
+                    let mut attest_json_offset = quote_offset;
+                    if let Some(ref quote_bytes) = quote {
+                        attest_json_offset += quote_bytes.len();
+                    }
 
-                    let mut resp_bytes = bincode::serialize(&get_report_resp)?;
-                    resp_bytes.append(&mut data_bytes);
+                    let mut resp_bytes: Vec<u8> =
+                        vec![0; attest_json_offset + attest_data_bytes.len()];
+                    let get_report_resp = resp_bytes.as_mut_ptr() as *mut AconGetReportRsp;
+
+                    unsafe {
+                        (*get_report_resp).header.command = request.command + 1;
+                        (*get_report_resp).header.size = resp_bytes.len() as u32;
+                        (*get_report_resp).rtmr_count = rtmr_count;
+                        (*get_report_resp).report = report;
+                        (*get_report_resp).quote_offset = quote_offset as i32;
+                        (*get_report_resp).attestation_json_offset = attest_json_offset as i32;
+                    }
+
+                    if let Some(quote_bytes) = quote {
+                        for i in 0..quote_bytes.len() {
+                            resp_bytes[quote_offset + i] = quote_bytes[i];
+                        }
+                    }
+
+                    for i in 0..attest_data_bytes.len() {
+                        resp_bytes[attest_json_offset + i] = attest_data_bytes[i];
+                    }
 
                     Ok(resp_bytes)
                 }
-                Err(e) => convert_error_bytes(request.command, &e.to_string()),
+                Err(e) => Ok(convert_error_bytes(request.command, &e.to_string())),
             }
         }
 
         2 => {
-            let set_attestation_data_req: AconSetAttestationDataReq = bincode::deserialize(
-                &request.bytes[0..mem::size_of::<AconSetAttestationDataReq>()],
-            )?;
+            let (attest_data_type, attest_data) = unsafe {
+                let set_attestation_data_req =
+                    request.bytes.as_ptr() as *const AconSetAttestationDataReq;
 
-            let attest_data_type = set_attestation_data_req.data_type;
-            let attest_data = unsafe {
-                convert_attest_data(
-                    attest_data_type == 2,
-                    &request.bytes[mem::size_of::<AconSetAttestationDataReq>()..],
+                (
+                    (*set_attestation_data_req).data_type,
+                    convert_attest_data(
+                        (*set_attestation_data_req).data_type,
+                        &request.bytes[mem::size_of::<AconSetAttestationDataReq>()..],
+                    )
+                    .to_owned(),
                 )
-                .to_owned()
             };
 
             if let Err(e) = service
                 .set_attestation_data(request.uid, attest_data_type, attest_data)
                 .await
             {
-                convert_error_bytes(request.command, &e.to_string())
+                Ok(convert_error_bytes(request.command, &e.to_string()))
             } else {
-                let set_attestation_data_rsp = AconSetAttestationDataRsp {
-                    header: AconMessageHdr {
-                        command: request.command + 1,
-                        size: mem::size_of::<AconMessageHdr>() as u32,
-                    },
-                };
+                let mut resp_bytes: Vec<u8> = vec![0; mem::size_of::<AconSetAttestationDataRsp>()];
+                let set_attestation_data_rsp =
+                    resp_bytes.as_mut_ptr() as *mut AconSetAttestationDataRsp;
 
-                Ok(bincode::serialize(&set_attestation_data_rsp)?)
+                unsafe {
+                    (*set_attestation_data_rsp).header.command = request.command + 1;
+                    (*set_attestation_data_rsp).header.size = resp_bytes.len() as u32;
+                }
+
+                Ok(resp_bytes)
             }
         }
 

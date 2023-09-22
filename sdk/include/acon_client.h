@@ -69,14 +69,16 @@ typedef struct {
 
 typedef struct {
     acon_message_hdr_t header;  // command = 0
+    bool is_quote;
     long long nonce[2];
     int data_type;              // 0 = no data; 1 = binary; 2 = string; others = reserved
 } acon_get_report_req_t;
 
 typedef struct {
     acon_message_hdr_t header;   // command = 1
-    td_report_t report;
     int rtmr_count;
+    td_report_t report;
+    int quote_offset;
     int attestation_json_offset;
 } acon_get_report_rsp_t;
 

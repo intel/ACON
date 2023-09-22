@@ -20,7 +20,7 @@ use crate::{
     container::{self, CStatus, Container},
     image::{Image, Manifest},
     pod::Pod,
-    utils, vsock_incoming,
+    report, utils, vsock_incoming,
 };
 
 mod grpc {
@@ -449,6 +449,7 @@ impl AconService for TDAconService {
 
         let nonce_hi = request.get_ref().nonce_hi;
         let nonce_lo = request.get_ref().nonce_lo;
+        let is_quote = request.get_ref().is_quote;
 
         let mut mrlog = HashMap::new();
         mrlog.insert(0, MrLog { logs: vec![] });
@@ -468,16 +469,23 @@ impl AconService for TDAconService {
             .get_attestation_data(requestor_nonce, acond_nonce, None)
             .map_err(|e| Status::unknown(e.to_string()))?;
 
-        let report = utils::get_report(&attestation_data)
-            .map_err(|e| Status::unknown(e.to_string()))?
-            .to_vec();
+        let (report, quote) = if is_quote {
+            report::get_quote(&attestation_data).map_err(|e| Status::unknown(e.to_string()))?
+        } else {
+            (
+                report::get_report(&attestation_data)
+                    .map_err(|e| Status::unknown(e.to_string()))?,
+                vec![],
+            )
+        };
 
         if let Some(tx) = &pod.timeout_tx {
             let _ = tx.send(false).await;
         }
 
         Ok(Response::new(ReportResponse {
-            report,
+            report: report.to_vec(),
+            quote,
             mrlog,
             attestation_data,
         }))

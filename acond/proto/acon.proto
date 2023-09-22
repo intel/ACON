@@ -78,6 +78,7 @@ message ContainerInfo {
 message ReportRequest {
     uint64 nonce_lo = 1;
     uint64 nonce_hi = 2;
+    bool is_quote = 3;
 }
 
 message MrLog {
@@ -86,8 +87,9 @@ message MrLog {
 
 message ReportResponse {
     bytes report = 1;
-    map<uint32, MrLog> mrlog = 2;
-    string attestation_data = 3;
+    bytes quote = 2;
+    map<uint32, MrLog> mrlog = 3;
+    string attestation_data = 4;
 }
 
 message GetManifestRequest {
