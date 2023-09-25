@@ -17,11 +17,12 @@ import (
 var force bool
 
 var shutDownCmd = &cobra.Command{
-	Use:   "shutdown ACON_VM ...",
-	Short: "Shut down ACON VMs and belonging containers",
+	Use:   "shutdown <ACON vitual machine>...",
+	Short: "Shut down ACON virtual machines and related containers",
 	Long: `
-Shut down ACON VMs and belonging containers. The VMs are represented by
-connection targets and can be obtained by using the 'status' subcommand`,
+Shut down ACON virtual machines and related containers. The virtual machines
+need to be specified by the '-c' flag and can be obtained by using the
+'aconcli status' subcommand`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return removeVM(args)
 	},
@@ -103,5 +104,5 @@ func removeVM(conns []string) error {
 func init() {
 	rootCmd.AddCommand(shutDownCmd)
 	shutDownCmd.Flags().BoolVarP(&force, "force", "f", false,
-		"force terminating the VM and all the ACON containers inside it")
+		"force terminating the virtual machines, i.e. no matter whether Shutdown/Kill command works")
 }

@@ -21,9 +21,9 @@ var notrunc bool
 
 var lsCmd = &cobra.Command{
 	Use:   "ls",
-	Short: "List manifests",
+	Short: "List ACON images in the repository",
 	Long: `
-List manifests in the ACON repository`,
+List current ACON image status in the ACON repository`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return lsManifest()
 	},
@@ -167,5 +167,5 @@ func lsManifest() error {
 
 func init() {
 	rootCmd.AddCommand(lsCmd)
-	lsCmd.Flags().BoolVar(&notrunc, "no-trunc", false, "Don't truncate output")
+	lsCmd.Flags().BoolVar(&notrunc, "no-trunc", false, "Don't truncate output for hash digest")
 }

@@ -14,7 +14,7 @@ var (
 	privFile         string
 	certFile         string
 	sigFile          string
-	releaseDir       string
+	exportName       string
 	targetDir        string
 	env              []string
 	cid              uint32

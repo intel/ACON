@@ -18,10 +18,13 @@ var (
 )
 
 var invokeCmd = &cobra.Command{
-	Use:   "invoke CUSTOM_COMMAND",
+	Use:   "invoke <custom command>",
 	Short: "Invoke custom command on an ACON container",
 	Long: `
-Invoke custom command on specified ACON container in specified ACON VM`,
+Invoke custom command on an ACON container within an ACON virtual machine.
+The ACON virtual machine  needs to be specified by the '-c' flag while ACON
+container needs to be specified by the '-e' flag. Both information can be
+obtained by using the 'aconcli status' subcommand`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return invoke(args)
 	},
@@ -63,19 +66,19 @@ func init() {
 	rootCmd.AddCommand(invokeCmd)
 
 	invokeCmd.Flags().StringVarP(&vmConnTarget, "connect", "c", "",
-		"connection target for the VM")
+		"connection target for specifying the ACON virtual machine")
 	invokeCmd.MarkFlagRequired("connect")
 
 	invokeCmd.Flags().Uint32VarP(&cid, "container", "e", 0,
-		"target acon container to invoke the command")
+		"target ACON container to invoke the command")
 	invokeCmd.MarkFlagRequired("container")
 
 	invokeCmd.Flags().Uint64VarP(&timeout, "timeout", "t", 30,
-		"timeout in seconds for capturing the output")
+		"optional timeout in seconds for capturing the command output")
 
 	invokeCmd.Flags().Uint64VarP(&sizeToCapture, "size", "s", config.DefaultCapSize,
-		"size in bytes for capturing the output")
+		"optional size in bytes for capturing the command output")
 
 	invokeCmd.Flags().StringVarP(&inputfile, "input", "i", "",
-		"file to get the input data")
+		"optional file to get the input data for the command")
 }

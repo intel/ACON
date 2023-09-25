@@ -12,12 +12,13 @@ import (
 )
 
 var stopCmd = &cobra.Command{
-	Use:   "stop ACON_VM ACON_CONTAINER ...",
-	Short: "Stop ACON containers in a ACON VM",
+	Use:   "stop <ACON virtual machine> <ACON containers>...",
+	Short: "Stop ACON containers within an ACON virtual machine",
 	Long: `
-Stop ACON containers in a VM. VM can be specified by the connection
-method and ACON containers are specified by container ids. All the
-information can be obtained by using the 'status' subcommand`,
+Stop ACON containers in an ACON virtual machine. VM can be specified by
+the connection target and containers are specified by the container id.
+VM and container information can be obtained by using the 'aconcli status'
+subcommand`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return stopAcons(args)
 	},

@@ -15,11 +15,11 @@ import (
 var resign bool = false
 
 var signCmd = &cobra.Command{
-	Use:   "sign MANIFEST_FILE",
+	Use:   "sign <manifest file>",
 	Short: "Sign the manifest file",
 	Long: `
-Sign the manifest file using the specified private key file and hash algorithm
-extracted from the specified certificate file.`,
+Sign the manifest file using the specified private key file and hash
+algorithm extracted from the specified certificate file`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return signManifest(args)

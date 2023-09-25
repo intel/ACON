@@ -30,21 +30,25 @@ var (
 )
 
 var runCmd = &cobra.Command{
-	Use:   "run [MANIFEST_FILE]...",
+	Use:   "run <manifest file>...",
 	Short: "Start ACON containers",
 	Long: `
-Start ACON container(s) in a new or existing ACON VM using ACON images.
+Start ACON container(s) in a new (indicated by '-n' flag) or existing
+(indicated by '-c' flag) ACON virtual machine using specified ACON
+images which can be specified on the command line either as a list of
+manifest files or using flag '-A', which means all the ACON images in
+the repository.
 
-ACON images can be specified on the command line either as a list of manifests
-or using flag '-a', which means all the images in the ACON repository.
+The script file to launch the VM can be specified using '-f' flag. If
+not specified, the default one from aconcli installation will be used.
+initrd and kernel image can be separately specified using environment
+variables 'ACON_STARTVM_PARAM_RAMDISK' and 'ACON_STARTVM_PARAM_KERNEL'
+respectively. If not specified, default images from aconcli installation
+will be used.
 
-The script file to launch the VM can be specified by the user. If not specified,
-the default one from aconcli installation will be used. initrd and kernel image
-can be separately specified using environment variables ACON_STARTVM_PARAM_RAMDISK
-and ACON_STARTVM_PARAM_KERNEL respectively. If not specified, default images from
-aconcli installation will be used.
-
-ACON container can be run in the foreground or background.`,
+ACON container can run in the foreground with '-i' flag to facilitate
+debugging. Additional environment variables inside container can be
+specified using '--env' flag`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return run(args)
 	},
@@ -255,29 +259,29 @@ func init() {
 	rootCmd.AddCommand(runCmd)
 
 	runCmd.Flags().BoolVarP(&startnew, "new", "n", false,
-		"start the container in a new ACON VM")
+		"start the container in a new ACON virtual machine")
 
 	runCmd.Flags().BoolVarP(&debug, "interactive", "i", false,
-		"bring VM to the foreground for debugging")
+		"bring virtual machine to the foreground for debugging")
 
-	runCmd.Flags().BoolVarP(&loadRepo, "Auto", "A", false,
-		"load/start all the workloads in the ACON repository")
+	runCmd.Flags().BoolVarP(&loadRepo, "all", "A", false,
+		"load/start ACON containers from all the images in the ACON repository")
 
 	runCmd.Flags().BoolVarP(&autoload, "auto", "a", false,
-		"automatically load depending manifests")
+		"automatically load depending ACON images during container loading process")
 
 	runCmd.Flags().StringSliceVarP(&loadonly, "loadonly", "l", nil,
-		"manifests to be loaded only")
+		"containers to be loaded only")
 
 	runCmd.Flags().StringVarP(&vmConnTarget, "connect", "c", "",
 		"start the container in an existing VM specified by the connect target")
 
 	runCmd.Flags().IntVarP(&timetolive, "timetolive", "t", 60,
-		"timeout for the newly created VM to exist")
+		"timeout in seconds for the newly created VM to exist")
 
 	runCmd.Flags().StringVarP(&startfile, "file", "f", "",
-		"path of the file to start the VM")
+		"path of the script file used to launch the virtual machine")
 
 	runCmd.Flags().StringSliceVar(&env, "env", nil,
-		"environment variables to be used")
+		"environment variables to be used inside the container")
 }

@@ -18,12 +18,15 @@ import (
 var prune bool
 
 var rmCmd = &cobra.Command{
-	Use:   "rm MANIFEST/DIGEST ...",
-	Short: "Remove one or more manifests",
+	Use:   "rm <manifest>...",
+	Short: "Remove one or more manifest from ACON repository",
 	Long: `
-Remove one or more manifest files from ACON repository.
-Manifest files can be specified either by the name or by the
-hash digest which can be obtained by using 'ls' subcommand`,
+Remove one or more manifest from ACON repository. Manifest can be specified
+either by the file path or by the hash digest which can be obtained by using
+'aconcli ls' subcommand. The certficate file and signature file corresponding
+to the manifest will also be removed while the file system layers will remain
+untouched until 'aconcli prune' subcommand determines they are no longer being
+used and hence removed`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return removeManifest(args)
 	},
@@ -102,5 +105,6 @@ func removeManifest(ids []string) error {
 
 func init() {
 	rootCmd.AddCommand(rmCmd)
-	rmCmd.Flags().BoolVarP(&prune, "prune", "p", false, "remove the manifest file whose symlink are broken")
+	rmCmd.Flags().BoolVarP(&prune, "prune", "p", false,
+		"also remove the manifest files whose symbolic link are currently broken")
 }

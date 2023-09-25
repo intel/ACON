@@ -15,12 +15,13 @@ import (
 var ignoreSig bool
 
 var releaseCmd = &cobra.Command{
-	Use:   "export MANIFEST",
-	Short: "Export the specified ACON images into a tarball file",
+	Use:   "export <manifest file>",
+	Short: "Export the ACON image into a tarball file",
 	Long: `
-Export the specified ACON workloads into a tarball file, including the
-workload manifests, the certificates, the signatures and their file
-system layers`,
+Export the ACON image corresponding to the specified manifest file into
+a tarball. The image includes a manifest file, a signature file, a
+certificate file to verify the signature, and the file system layers
+of the image`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return exportBundles(args)
@@ -39,7 +40,7 @@ func exportBundles(args []string) error {
 		return err
 	}
 
-	if err := r.ExportBundle(manifestFile, releaseDir); err != nil {
+	if err := r.ExportBundle(manifestFile, exportName); err != nil {
 		fmt.Fprintf(os.Stderr, "Export Bundle: %v\n", err)
 		return err
 	}
@@ -49,8 +50,8 @@ func exportBundles(args []string) error {
 func init() {
 	rootCmd.AddCommand(releaseCmd)
 	releaseCmd.Flags().BoolVarP(&ignoreSig, "ignoresig", "", false,
-		"ignoring missing signature file")
-	releaseCmd.Flags().StringVarP(&releaseDir, "output", "o", "",
-		"output directory for the release materials")
+		"ignoring missing signature file while exporting image")
+	releaseCmd.Flags().StringVarP(&exportName, "output", "o", "",
+		"name of the output tarball file to hold the exported image")
 	releaseCmd.MarkFlagRequired("output")
 }
