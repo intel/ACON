@@ -17,11 +17,12 @@ import (
 var repodir string
 
 var initCmd = &cobra.Command{
-	Use:   "init [PATH_FOR_REPO]",
+	Use:   "init [<directory path>]",
 	Short: "Create an empty ACON repository",
 	Long: `
-Create an empty ACON repository under the directory if specified.
-Otherwise, it will be created under current directory`,
+Create an empty ACON repository named '.acon'. The repository  will be
+created within the specified directory. If the directory path is omitted,
+it will be created under current directory`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return createRepo(args)
 	},

@@ -116,11 +116,13 @@ func parseReport(report []byte) error {
 }
 
 var reportCmd = &cobra.Command{
-	Use:   "report NONCE_LOW NONCE_HIGH",
-	Short: "Get TD report from specified ACON container",
+	Use:   "report <nonce low>  <nonce high>",
+	Short: "Get TD report from specified ACON virtual machine",
 	Long: `
-Get the TD Report from specified ACON container, given
-the 64-bit hexadecimal low and high nonce values`,
+Get TD report from an ACON virtual machine. The VM needs to be specified
+using the '-c' flag whose value can be obtained using the 'aconcli status'
+subcommand. 'nonce low' and 'nonce high' represents two 64-bit hexadecimal
+values to be used for attestation`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return getReport(args)
 	},
@@ -166,6 +168,6 @@ func init() {
 	rootCmd.AddCommand(reportCmd)
 
 	reportCmd.Flags().StringVarP(&vmConnTarget, "connect", "c", "",
-		"connection target for the VM")
+		"connection target for the ACON virtual machine")
 	reportCmd.MarkFlagRequired("conn")
 }

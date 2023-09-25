@@ -13,15 +13,13 @@ import (
 )
 
 var substituteAll bool
-var refs []string
 
 var aliasCmd = &cobra.Command{
-	Use:   "alias-substitute MANIFEST_FILE",
+	Use:   "alias-substitute <manifest file>",
 	Short: "Substitute file system layer digests with aliases",
 	Long: `
-Substitute the digests of file system layers with their aliases
-recorded in the manifest files from ACON repository or command
-line`,
+Substitute the digests of file system layers from specified
+manifest file with the alias names recorded in the ACON repository`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return aliasSubstitute(args)
@@ -55,9 +53,6 @@ func aliasSubstitute(args []string) error {
 
 func init() {
 	rootCmd.AddCommand(aliasCmd)
-
-	aliasCmd.Flags().StringSliceVarP(&refs, "input", "i", nil,
-		"manifest files for alias substitution reference")
 	aliasCmd.Flags().BoolVarP(&substituteAll, "all", "a", false,
-		"Consider all manifest files, even though there is no associated signature file")
+		"consider all manifest files, even though there is no associated signature file")
 }

@@ -13,7 +13,7 @@ import (
 
 var pruneCmd = &cobra.Command{
 	Use:   "prune",
-	Short: "Prune unused file system layers",
+	Short: "Prune unused file system layers from ACON repository",
 	Long: `
 Prune unused file system layers from the ACON repository`,
 	RunE: func(cmd *cobra.Command, args []string) error {

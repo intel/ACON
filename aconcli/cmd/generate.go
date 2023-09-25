@@ -18,12 +18,13 @@ import (
 )
 
 var generateCmd = &cobra.Command{
-	Use:   "generate DOCKER_IMAGE",
-	Short: "Generate a manifest and commit file system layers to ACON repository",
+	Use:   "generate <Docker image>",
+	Short: "Generate a manifest file and commit file system layers to ACON repository",
 	Long: `
-Generate a manifest file in JSON format and commit to ACON repository the file
-system layers from specified Docker image. The resulting manifest file can be
-further edited manually and then be signed using the 'sign' sub-command.`,
+Generate a manifest file in JSON format and commit to ACON repository
+the file system layers from specified Docker image. The output manifest
+file can be further edited manually and can be signed or resigned using
+the 'aconcli sign' sub-command`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return generateManifest(args)
@@ -136,6 +137,6 @@ func generateManifest(args []string) error {
 func init() {
 	rootCmd.AddCommand(generateCmd)
 	generateCmd.Flags().StringVarP(&manifestFile, "output", "o", "",
-		"output file name for the manifest")
+		"output file name for the manifest file")
 	generateCmd.MarkFlagRequired("output")
 }
