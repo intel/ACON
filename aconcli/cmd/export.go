@@ -21,7 +21,8 @@ var releaseCmd = &cobra.Command{
 Export the ACON image corresponding to the specified manifest file into
 a tarball. The image includes a manifest file, a signature file, a
 certificate file to verify the signature, and the file system layers
-of the image`,
+of the image. The images on which the specified image depends will not
+be exported`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return exportBundles(args)
