@@ -722,7 +722,7 @@ Every *Container*'s entry point is started as the leader of both a new session a
 
 ### Working Directory
 
-A *Container*'s entry point is started in the directory specified by `workdir` of the *Image*'s *Manifest*.
+A *Container*'s entry point is started in the directory specified by `workingDir` of the *Image*'s *Manifest*.
 
 ### Environment variables
 
@@ -867,7 +867,7 @@ There are two types of entry points - *standard* and *custom*.
 
 Environment variables passed to additional entry points are **not** constrained by `env` - i.e., `acond` does **not** sanitize environment variables according to the `evn` array in the *Manifest*, hence an additional entry point must sanitize all environment variables that affect its security.
 
-Additional entry points are always started in `/` regardless of `workdir` setting in the *Manifest*.
+Additional entry points are always started in `/` regardless of `workingDir` setting in the *Manifest*.
 
 [oci-image-spec]: https://github.com/opencontainers/image-spec/blob/main/spec.md
 [man-execve.2]: https://man7.org/linux/man-pages/man2/execve.2.html
