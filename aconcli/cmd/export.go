@@ -15,7 +15,7 @@ import (
 var ignoreSig bool
 
 var releaseCmd = &cobra.Command{
-	Use:   "export <manifest file>",
+	Use:   "export <manifest-file>",
 	Short: "Export the ACON image into a tarball file",
 	Long: `
 Export the ACON image corresponding to the specified manifest file into

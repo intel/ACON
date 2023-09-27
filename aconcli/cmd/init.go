@@ -17,7 +17,7 @@ import (
 var repodir string
 
 var initCmd = &cobra.Command{
-	Use:   "init [<directory path>]",
+	Use:   "init [<directory-path>]",
 	Short: "Create an empty ACON repository",
 	Long: `
 Create an empty ACON repository named '.acon'. The repository  will be

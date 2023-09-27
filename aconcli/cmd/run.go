@@ -30,7 +30,7 @@ var (
 )
 
 var runCmd = &cobra.Command{
-	Use:   "run <manifest file>...",
+	Use:   "run <manifest-file>...",
 	Short: "Start ACON containers",
 	Long: `
 Start ACON container(s) in a new (indicated by '-n' flag) or existing

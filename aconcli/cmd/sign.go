@@ -15,7 +15,7 @@ import (
 var resign bool = false
 
 var signCmd = &cobra.Command{
-	Use:   "sign <manifest file>",
+	Use:   "sign <manifest-file>",
 	Short: "Sign the manifest file",
 	Long: `
 Sign the manifest file using the specified private key file and hash

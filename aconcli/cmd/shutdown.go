@@ -17,7 +17,7 @@ import (
 var force bool
 
 var shutDownCmd = &cobra.Command{
-	Use:   "shutdown <ACON vitual machine>...",
+	Use:   "shutdown <ACON-vitual-machine>...",
 	Short: "Shut down ACON virtual machines and related containers",
 	Long: `
 Shut down ACON virtual machines and related containers. The virtual machines
