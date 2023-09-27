@@ -16,7 +16,13 @@ jobs:
 
     steps:
     - uses: actions/checkout@v3
-    - name: Prepare Dockerfile
-      run: echo -e "From rust:slim\nRUN apt update -y && apt upgrade -y && apt install -y pkg-config libssl-dev git musl-tools protobuf-compiler libprotobuf-dev\nRUN git clone https://github.com/intel/ACON.git && cd ACON/acond && CARGO_BUILD_RUSTFLAGS=-Ctarget-feature=-crt-static cargo build --release" >> Dockerfile
     - name: Debian builds
-      run: docker build --progress=plain -t acond .
+      shell: docker build --progress=plain -t acond -f {0} .
+      run: |
+        FROM rust:slim
+        RUN apt update -y && \
+          apt upgrade -y && \
+          apt install -y pkg-config libssl-dev git musl-tools protobuf-compiler libprotobuf-dev
+        COPY . ACON
+        RUN cd ACON/acond && \
+          CARGO_BUILD_RUSTFLAGS=-Ctarget-feature=-crt-static cargo build --release
