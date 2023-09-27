@@ -18,12 +18,12 @@ import (
 )
 
 var generateCmd = &cobra.Command{
-	Use:   "generate <Docker image>",
+	Use:   "generate <docker-image>",
 	Short: "Generate a manifest file and commit file system layers to ACON repository",
 	Long: `
 Generate a manifest file in JSON format and commit to ACON repository
 the file system layers from specified Docker image. The output manifest
-file can be further edited manually and can be signed or resigned using
+file can be further edited manually and can be signed or re-signed using
 the 'aconcli sign' sub-command`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {

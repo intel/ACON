@@ -14,7 +14,7 @@ import (
 )
 
 var hashCmd = &cobra.Command{
-	Use:   "hash <certificate file>  <manifest file>...",
+	Use:   "hash <certificate-file>  <manifest-file>...",
 	Short: "Generate the hash digest for the manifest file",
 	Long: `
 Generate the hash digest for the manifest file using the hash

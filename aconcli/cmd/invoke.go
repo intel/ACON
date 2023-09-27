@@ -18,7 +18,7 @@ var (
 )
 
 var invokeCmd = &cobra.Command{
-	Use:   "invoke <custom command>",
+	Use:   "invoke <custom-command>",
 	Short: "Invoke custom command on an ACON container",
 	Long: `
 Invoke custom command on an ACON container within an ACON virtual machine.

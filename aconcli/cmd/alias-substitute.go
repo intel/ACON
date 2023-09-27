@@ -15,7 +15,7 @@ import (
 var substituteAll bool
 
 var aliasCmd = &cobra.Command{
-	Use:   "alias-substitute <manifest file>",
+	Use:   "alias-substitute <manifest-file>",
 	Short: "Substitute file system layer digests with aliases",
 	Long: `
 Substitute the digests of file system layers from specified

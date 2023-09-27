@@ -12,7 +12,7 @@ import (
 )
 
 var importCmd = &cobra.Command{
-	Use:   "import <tarball file>...",
+	Use:   "import <tarball-file>...",
 	Short: "Import ACON images into the ACON repository",
 	Long: `
 Import existing ACON images represented by the specified tarballs into

@@ -12,7 +12,7 @@ import (
 )
 
 var stopCmd = &cobra.Command{
-	Use:   "stop <ACON virtual machine> <ACON containers>...",
+	Use:   "stop <ACON-virtual-machine> <ACON-containers>...",
 	Short: "Stop ACON containers within an ACON virtual machine",
 	Long: `
 Stop ACON containers in an ACON virtual machine. VM can be specified by

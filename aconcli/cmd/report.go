@@ -116,7 +116,7 @@ func parseReport(report []byte) error {
 }
 
 var reportCmd = &cobra.Command{
-	Use:   "report <nonce low>  <nonce high>",
+	Use:   "report <nonce-low>  <nonce-high>",
 	Short: "Get TD report from specified ACON virtual machine",
 	Long: `
 Get TD report from an ACON virtual machine. The VM needs to be specified
