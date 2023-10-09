@@ -45,7 +45,7 @@ get_options() {
             i) docker_id="$OPTARG";;
             f) docker_file="$OPTARG";;
             h) opt_h=1
-               echo "Usage: script.sh -w bundle_dir -c container -f docker_file [-h]"
+               echo "Usage: script.sh -d bundle_dir -i container -f docker_file [-h]"
                ;;
             \?) echo "Invalid option: -$OPTARG" >&2
                 exit 1
@@ -62,7 +62,7 @@ run_workload() {
     fi
 
     test -d "$bundle_dir" && {
-        log_warn "$bundle_dir already exist and will be cleared" 
+        log_warn "$bundle_dir directory already exist and will be cleared" 
         rm -rf $bundle_dir
     }
 
