@@ -45,7 +45,7 @@ get_options() {
             i) docker_id="$OPTARG";;
             f) docker_file="$OPTARG";;
             h) opt_h=1
-               echo "Usage: script.sh -d bundle_dir -i container -f docker_file [-h]"
+               echo "Usage: run_workload -d bundle_dir -i container -f docker_file [-h]"
                ;;
             \?) echo "Invalid option: -$OPTARG" >&2
                 exit 1
