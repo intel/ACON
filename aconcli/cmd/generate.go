@@ -103,14 +103,20 @@ func generateManifest(args []string) error {
 		}
 		primaryLayers[i] = converted
 	}
+
 	// write to specified manifest file
+	workingDir := inspect.Config.WorkingDir
+	if workingDir == "" {
+		workingDir = "/"
+	}
 	w := repo.Workload{MaxInstance: 1,
-		WorkingDir: inspect.Config.WorkingDir,
-		Entrypoint: inspect.Config.Entrypoint,
-		Env:        inspect.Config.Env,
-		Signals:    make([]int32, 0),
-		Uids:       make([]uint32, 0),
-		LogFDs:     make([]uint32, 0)}
+		SpecVersion: [2]uint32{1, 0},
+		WorkingDir:  workingDir,
+		Entrypoint:  inspect.Config.Entrypoint,
+		Env:         inspect.Config.Env,
+		Signals:     make([]int32, 0),
+		Uids:        make([]uint32, 0),
+		LogFDs:      make([]uint32, 0)}
 
 	_, err = os.Stat(manifestFile)
 	if err == nil {
