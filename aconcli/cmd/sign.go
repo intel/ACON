@@ -15,11 +15,23 @@ import (
 var resign bool = false
 
 var signCmd = &cobra.Command{
-	Use:   "sign <manifest-file>",
-	Short: "Sign the manifest file",
+	Use:     "sign manifest",
+	Short:   "Sign an ACON image",
+	GroupID: "image",
 	Long: `
-Sign the manifest file using the specified private key file and hash
-algorithm extracted from the specified certificate file`,
+Sign the specified ACON image/manifest and store the signature in the ACON
+image repo.
+
+When signing a manifest for the first time, both a private key file and its
+corresponding certificate file must be specified. The certificate file is used
+to determine the hash algorithm when creating the digital signature. 'aconcli
+sign' keeps symlinks (in the ACON image repo) to the private key and
+certificate files to facilitate future re-signing.
+
+When re-signing a manifest, 'aconcli sign' reuses the private key and
+certifcate files by default, and can be overridden by respective command line
+flags.
+`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return signManifest(args)

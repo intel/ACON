@@ -17,12 +17,19 @@ import (
 var force bool
 
 var shutDownCmd = &cobra.Command{
-	Use:   "shutdown <ACON-vitual-machine>...",
-	Short: "Shut down ACON virtual machines and related containers",
+	Use:     "shutdown <ACON-vitual-machine>...",
+	Short:   "Shut down ACON TD/VM",
+	GroupID: "runtime",
 	Long: `
-Shut down ACON virtual machines and related containers. The virtual machines
-need to be specified by the '-c' flag and can be obtained by using the
-'aconcli status' subcommand`,
+Shut down the specified ACON TD/VM.
+
+When there are running containers, 'aconcli shutdown' would try to stop them as
+if 'aconcli stop' were invoked on each of them, before shutting down the ACON
+TD/VM.
+
+The ACON TD/VM must be specified by the '-c' flag. Use 'aconcli status' to list
+ACON TDs/VMs and ACON containers running in them.
+`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return removeVM(args)
 	},

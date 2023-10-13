@@ -12,10 +12,13 @@ import (
 )
 
 var pruneCmd = &cobra.Command{
-	Use:   "prune",
-	Short: "Prune unused file system layers from ACON repository",
+	Use:     "prune",
+	Short:   "Prune unreferenced file system layers",
+	GroupID: "image",
 	Long: `
-Prune unused file system layers from the ACON repository`,
+Prune unused file system layers from the current ACON image repo, whose path is
+determined by the current working directory.
+`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return pruneBlobs()
 	},

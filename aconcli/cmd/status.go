@@ -18,10 +18,13 @@ import (
 )
 
 var statusCmd = &cobra.Command{
-	Use:   "status",
-	Short: "Show status of ACON virtual machines and related containers",
+	Use:     "status",
+	Short:   "Show status of ACON TDs/VMs and containers",
+	GroupID: "runtime",
 	Long: `
-Show status of all the ACON virtual machines and their related containers`,
+Show status of all ACON TDs/VMs running in the local platform and containers running in them.
+`,
+	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return showStatus()
 	},

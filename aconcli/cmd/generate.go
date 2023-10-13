@@ -18,8 +18,9 @@ import (
 )
 
 var generateCmd = &cobra.Command{
-	Use:   "generate <docker-image>",
-	Short: "Generate a manifest file and commit file system layers to ACON repository",
+	Use:     "generate <docker-image>",
+	Short:   "Generate a manifest file and commit file system layers to ACON repository",
+	GroupID: "image",
 	Long: `
 Generate a manifest file in JSON format and commit to ACON repository
 the file system layers from specified Docker image. The output manifest

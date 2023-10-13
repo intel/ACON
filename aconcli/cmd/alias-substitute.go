@@ -15,11 +15,20 @@ import (
 var substituteAll bool
 
 var aliasCmd = &cobra.Command{
-	Use:   "alias-substitute <manifest-file>",
-	Short: "Substitute file system layer digests with aliases",
+	Use:     "alias-substitute manifest",
+	Short:   "Substitute file system layer digests with aliases",
+	GroupID: "image",
 	Long: `
-Substitute the digests of file system layers from specified
-manifest file with the alias names recorded in the ACON repository`,
+Substitute digests of file system layers in the specified ACON image manifest
+with aliases defined in ACON images/manifests stored in the same ACON image
+repo where the specified manifest resides.
+
+The ACON image repo path is implied by the manifest file path.
+
+By default, only signed images/manifests are searched for alias definitions
+unless '-a' is specified, in which case both signed and unsigned manifests are
+searched.
+`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return aliasSubstitute(args)
@@ -54,5 +63,5 @@ func aliasSubstitute(args []string) error {
 func init() {
 	rootCmd.AddCommand(aliasCmd)
 	aliasCmd.Flags().BoolVarP(&substituteAll, "all", "a", false,
-		"consider all manifest files, even though there is no associated signature file")
+		"search both signed and unsigned manifests for alias definitions")
 }

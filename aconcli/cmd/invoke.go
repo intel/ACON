@@ -18,13 +18,21 @@ var (
 )
 
 var invokeCmd = &cobra.Command{
-	Use:   "invoke <custom-command>",
-	Short: "Invoke custom command on an ACON container",
+	Use:     "invoke custom_command [args]...",
+	Short:   "Invoke custom command in an ACON container",
+	GroupID: "runtime",
 	Long: `
-Invoke custom command on an ACON container within an ACON virtual machine.
-The ACON virtual machine  needs to be specified by the '-c' flag while ACON
-container needs to be specified by the '-e' flag. Both information can be
-obtained by using the 'aconcli status' subcommand`,
+Invoke a custom command in an existing ACON container within an ACON TD/VM.
+
+The ACON TD/VM must be specified by the '-c' flag while the ACON container must
+be specified by the '-e' flag. Use 'aconcli status' to list ACON TDs/VMs and
+ACON containers running in them.
+
+NOTE: A custom command is an executable file located in /lib/acon/entrypoint.d/
+inside the ACON container's directory tree. Its file name must start with a
+capital letter.
+`,
+	Args: cobra.MinimumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return invoke(args)
 	},
@@ -66,19 +74,19 @@ func init() {
 	rootCmd.AddCommand(invokeCmd)
 
 	invokeCmd.Flags().StringVarP(&vmConnTarget, "connect", "c", "",
-		"connection target for specifying the ACON virtual machine")
+		"protocol/address of the ACON TD/VM")
 	invokeCmd.MarkFlagRequired("connect")
 
 	invokeCmd.Flags().Uint32VarP(&cid, "container", "e", 0,
-		"target ACON container to invoke the command")
+		"the ACON container to execute the custom command")
 	invokeCmd.MarkFlagRequired("container")
 
 	invokeCmd.Flags().Uint64VarP(&timeout, "timeout", "t", 30,
-		"optional timeout in seconds for capturing the command output")
+		"capture up to this number of seconds of the command output")
 
 	invokeCmd.Flags().Uint64VarP(&sizeToCapture, "size", "s", config.DefaultCapSize,
-		"optional size in bytes for capturing the command output")
+		"capture up to this number of bytes of the command output")
 
 	invokeCmd.Flags().StringVarP(&inputfile, "input", "i", "",
-		"optional file to get the input data for the command")
+		"optional file serving as stdin to the command")
 }

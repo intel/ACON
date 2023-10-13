@@ -13,10 +13,22 @@ import (
 )
 
 var killCmd = &cobra.Command{
-	Use:   "kill SIGNAL_NUM",
-	Short: "Send a signal to an ACON container",
+	Use:     "kill signo",
+	Short:   "Signal an ACON container",
+	GroupID: "runtime",
 	Long: `
-Send the specified signal to the ACON container in the VM`,
+Send the specified signal to the ACON container in the specified ACON TD/VM.
+
+The ACON TD/VM must be specified by the '-c' flag while the ACON container must
+be specified by the '-e' flag. Use 'aconcli status' to list ACON TDs/VMs and
+ACON containers running in them.
+
+'signo' (signal number) could be a positive or negative integer. A positive
+signo will be sent to the container process (PID 1) only, while a negative
+signo will cause -signo to be sent to the whole process group led by the
+container process.
+`,
+	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return kill(args)
 	},
@@ -47,10 +59,10 @@ func init() {
 	rootCmd.AddCommand(killCmd)
 
 	killCmd.Flags().StringVarP(&vmConnTarget, "connect", "c", "",
-		"connection target for the VM")
+		"protocol/address of the ACON TD/VM")
 	killCmd.MarkFlagRequired("connect")
 
 	killCmd.Flags().Uint32VarP(&cid, "container", "e", 0,
-		"target acon container to invoke the command")
+		"the ACON container to which the signal will be sent")
 	killCmd.MarkFlagRequired("container")
 }
