@@ -12,12 +12,13 @@ import (
 )
 
 var importCmd = &cobra.Command{
-	Use:   "import <tarball-file>...",
-	Short: "Import ACON images into the ACON repository",
+	Use:     "import tarball...",
+	Short:   "Import ACON images from tarballs",
+	GroupID: "image",
 	Long: `
-Import existing ACON images represented by the specified tarballs into
-the ACON repositoy. Imported images will be referenced during alias
-substitution process performed by 'aconcli alias-substitute' subcommand`,
+Import ACON images from tarballs (created by 'aconcli export') into the current
+ACON image repo, whose path is determined by the current working directory.
+`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return importManifest(args)

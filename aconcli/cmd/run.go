@@ -30,8 +30,9 @@ var (
 )
 
 var runCmd = &cobra.Command{
-	Use:   "run <manifest-file>...",
-	Short: "Start ACON containers",
+	Use:     "run <manifest-file>...",
+	Short:   "Start ACON containers",
+	GroupID: "runtime",
 	Long: `
 Start ACON container(s) in a new (indicated by '-n' flag) or existing
 (indicated by '-c' flag) ACON virtual machine using specified ACON

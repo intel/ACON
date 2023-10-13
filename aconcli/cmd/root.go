@@ -3,32 +3,24 @@
 
 package cmd
 
-import (
-	"os"
-
-	"github.com/spf13/cobra"
-)
+import "github.com/spf13/cobra"
 
 // rootCmd represents the base command when called without any subcommands
 var rootCmd = &cobra.Command{
 	Use:   "aconcli",
-	Short: "A command line tool to handle Attested Containers (ACON)",
+	Short: "ACON (Attested Container) Command Line Interface",
 	Long: `
-This tool can be used to handle various aspects of the ACON workloads.
-It can generate a manifest for a workload, sign the manifest, save file
-system layer contents and can also create virtual machines, run workloads
-and check their status`,
+Creates/Manages ACON (Attested Container) images and ACON virtual machines.
+`,
 }
 
-// Execute adds all child commands to the root command and sets flags appropriately.
-// This is called by main.main(). It only needs to happen once to the rootCmd.
-func Execute() {
-	err := rootCmd.Execute()
-	if err != nil {
-		os.Exit(1)
-	}
+func Cli() *cobra.Command {
+	return rootCmd
 }
 
 func init() {
-	rootCmd.PersistentFlags().StringVarP(&targetDir, "directory", "C", "", "change to directory")
+	rootCmd.AddGroup(
+		&cobra.Group{"image", "ACON Image and Image Repo Commands:"},
+		&cobra.Group{"runtime", "ACON TD/VM and Container Commands:"})
+	rootCmd.PersistentFlags().StringVarP(&targetDir, "directory", "C", "", "change working directory before performing any operations")
 }

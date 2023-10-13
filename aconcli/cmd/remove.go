@@ -18,15 +18,20 @@ import (
 var prune bool
 
 var rmCmd = &cobra.Command{
-	Use:   "rm <manifest>...",
-	Short: "Remove one or more manifest from ACON repository",
+	Use:     "rm manifest...",
+	Short:   "Remove ACON images",
+	GroupID: "image",
 	Long: `
-Remove one or more manifest from ACON repository. Manifest can be specified
-either by the file path or by the hash digest which can be obtained by using
-'aconcli ls' subcommand. The certficate file and signature file corresponding
-to the manifest will also be removed while the file system layers will remain
-untouched until 'aconcli prune' subcommand determines they are no longer being
-used and hence removed`,
+Remove one or more ACON images/manifests from their ACON image repos.
+
+Manifests can be specified either by paths or by hash digests, which can be
+obtained by 'aconcli ls'.
+
+'aconcli rm' also removes certficate and signature files associated with the
+specified manifests, but it does NOT remove file system layers as they may be
+shared among multiple ACON images/manifests. 'aconcli prune' can be used to
+clean up unreferenced file system layers.
+`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return removeManifest(args)
 	},

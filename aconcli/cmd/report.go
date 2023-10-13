@@ -116,13 +116,15 @@ func parseReport(report []byte) error {
 }
 
 var reportCmd = &cobra.Command{
-	Use:   "report <nonce-low>  <nonce-high>",
-	Short: "Get TD report from specified ACON virtual machine",
+	Use:     "report <nonce-low>  <nonce-high>",
+	Short:   "Request TD report or Quote",
+	GroupID: "runtime",
 	Long: `
-Get TD report from an ACON virtual machine. The VM needs to be specified
-using the '-c' flag whose value can be obtained using the 'aconcli status'
-subcommand. 'nonce low' and 'nonce high' represents two 64-bit hexadecimal
-values to be used for attestation`,
+Request a TD report or Quote from an ACON TD/VM.
+
+The ACON TD/VM must be specified by the '-c' flag. Use 'aconcli status' to list
+ACON TDs/VMs and ACON containers running in them.
+`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return getReport(args)
 	},

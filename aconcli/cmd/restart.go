@@ -12,13 +12,19 @@ import (
 )
 
 var restartCmd = &cobra.Command{
-	Use:   "restart",
-	Short: "Restart specified ACON container",
+	Use:     "restart",
+	Short:   "Restart ACON container",
+	GroupID: "runtime",
 	Long: `
-Restart the specified ACON container within the specified virtual machine.
-The ACON virtual machine needs to be specified by the '-c' flag while ACON
-container needs to be specified by the '-e' flag. Both information can be
-obtained by using the 'aconcli status' subcommand`,
+Restart the specified ACON container in the specified ACON TD/VM.
+
+If the specified ACON container is running, 'aconcli restart' would try to stop
+it before restarting it.
+
+The ACON TD/VM must be specified by the '-c' flag while the ACON container must
+be specified by the '-e' flag. Use 'aconcli status' to list ACON TDs/VMs and
+ACON containers running in them.
+`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return restart(args)
 	},

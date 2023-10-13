@@ -20,10 +20,13 @@ import (
 var notrunc bool
 
 var lsCmd = &cobra.Command{
-	Use:   "ls",
-	Short: "List ACON images in the repository",
+	Use:     "ls",
+	Short:   "List ACON images",
+	GroupID: "image",
 	Long: `
-List current ACON image status in the ACON repository`,
+List ACON images in the current acon image repo, whose path is determined by
+the current working directory.
+`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return lsManifest()
 	},

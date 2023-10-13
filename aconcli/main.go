@@ -3,8 +3,13 @@
 
 package main
 
-import "aconcli/cmd"
+import (
+	"aconcli/cmd"
+	"os"
+)
 
 func main() {
-	cmd.Execute()
+	if err := cmd.Cli().Execute(); err != nil {
+		os.Exit(1)
+	}
 }
