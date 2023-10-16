@@ -3,7 +3,7 @@
 
 use crate::utils;
 use anyhow::{anyhow, Result};
-use nix::{ioctl_read, ioctl_readwrite};
+use nix::{ioctl_readwrite, ioctl_write_ptr};
 use openssl::sha;
 use std::{
     convert::TryInto,
@@ -18,7 +18,7 @@ pub const REPORT_DATA_SIZE: usize = 0x40;
 pub const REPORT_SIZE: usize = 0x400;
 pub const NUM_RTMRS: i32 = 4;
 
-const ATTEST_DEV_PATH: &str = "/dev/tdx_guest";
+const TDX_GUEST: &str = "/dev/tdx_guest";
 const HEADER_SIZE: usize = 4;
 const REQ_BUF_SIZE: usize = 0x4000;
 const GET_QUOTE_IN_FLIGHT: u64 = 0xffffffffffffffff;
@@ -45,7 +45,7 @@ struct TdxQuoteHdr {
     status: u64,
     in_len: u32,
     out_len: u32,
-    data: __IncompleteArrayField<u64>,
+    data: __IncompleteArrayField<u64>, // Same as defined - https://github.com/intel/SGXDataCenterAttestationPrimitives/blob/master/QuoteGeneration/quote_wrapper/tdx_attest
 }
 
 #[repr(C)]
@@ -54,15 +54,15 @@ pub struct TdxQuoteReq {
     len: u64,
 }
 
-ioctl_readwrite!(get_tdx_report, b'T', 0x01, TdxReportReq);
-ioctl_read!(extend_tdx_rtmr, b'T', 0x03, TdxExtendRtmrReq);
-ioctl_read!(get_tdx_quote, b'T', 0x04, TdxQuoteReq);
+ioctl_readwrite!(tdx_get_report, b'T', 0x01, TdxReportReq);
+ioctl_write_ptr!(tdx_extend_rtmr, b'T', 0x03, TdxExtendRtmrReq);
+ioctl_readwrite!(tdx_get_quote, b'T', 0x04, TdxQuoteReq);
 
 pub fn extend_rtmr(contents: &str) -> Result<()> {
-    let devf = match File::options().write(true).open(ATTEST_DEV_PATH) {
+    let devf = match File::options().write(true).open(TDX_GUEST) {
         Ok(f) => Some(f),
         Err(_) => {
-            eprintln!("Fails to open attestation device.");
+            eprintln!("Failed to open {}", TDX_GUEST);
             None
         }
     };
@@ -73,18 +73,15 @@ pub fn extend_rtmr(contents: &str) -> Result<()> {
             (*req.as_mut_ptr()).data = sha::sha384(contents.to_string().as_bytes());
             (*req.as_mut_ptr()).index = 3;
 
-            extend_tdx_rtmr(f.as_raw_fd(), req.as_mut_ptr())?;
+            tdx_extend_rtmr(f.as_raw_fd(), req.as_mut_ptr())?;
         }
     }
 
     Ok(())
 }
 
-pub fn get_report(attest_data: &String) -> Result<[u8; REPORT_SIZE]> {
-    let devf = File::options()
-        .read(true)
-        .write(true)
-        .open(ATTEST_DEV_PATH)?;
+pub fn get_report(attest_data: &String) -> Result<Vec<u8>> {
+    let devf = File::options().read(true).write(true).open(TDX_GUEST)?;
 
     let hash = sha::sha384(attest_data.as_bytes());
     let mut report_data = vec![0; REPORT_DATA_SIZE];
@@ -97,19 +94,16 @@ pub fn get_report(attest_data: &String) -> Result<[u8; REPORT_SIZE]> {
         let data = report_data.try_into().unwrap();
         (*req.as_mut_ptr()).report_data.clone_from(&data);
 
-        get_tdx_report(devf.as_raw_fd(), req.as_mut_ptr())?;
+        tdx_get_report(devf.as_raw_fd(), req.as_mut_ptr())?;
 
-        Ok((*req.as_mut_ptr()).td_report)
+        Ok((*req.as_mut_ptr()).td_report.to_vec())
     }
 }
 
-pub fn get_quote(attest_data: &String) -> Result<([u8; REPORT_SIZE], Vec<u8>)> {
+pub fn get_quote(attest_data: &String) -> Result<Vec<u8>> {
     let report = get_report(attest_data)?;
 
-    let devf = File::options()
-        .read(true)
-        .write(true)
-        .open(ATTEST_DEV_PATH)?;
+    let devf = File::options().read(true).write(true).open(TDX_GUEST)?;
 
     let (err, req) = qgs_msg_lib::qgs_msg_gen_get_quote_req(report.as_slice(), None);
     if err != qgs_msg_lib::QGS_MSG_SUCCESS {
@@ -144,7 +138,7 @@ pub fn get_quote(attest_data: &String) -> Result<([u8; REPORT_SIZE], Vec<u8>)> {
         (*req.as_mut_ptr()).buf = tdx_quote_hdr as u64;
         (*req.as_mut_ptr()).len = REQ_BUF_SIZE as u64;
 
-        get_tdx_quote(devf.as_raw_fd(), req.as_mut_ptr())?;
+        tdx_get_quote(devf.as_raw_fd(), req.as_mut_ptr())?;
 
         if (*tdx_quote_hdr).status != 0 || (*tdx_quote_hdr).out_len < HEADER_SIZE as u32 {
             match (*tdx_quote_hdr).status {
@@ -171,7 +165,7 @@ pub fn get_quote(attest_data: &String) -> Result<([u8; REPORT_SIZE], Vec<u8>)> {
             return Err(anyhow!(utils::ERR_ATTEST_UNEXPECTED));
         }
 
-        Ok((report, quote.unwrap()))
+        Ok(quote.unwrap())
     }
 }
 
