@@ -1,27 +1,25 @@
 // Copyright (C) 2023 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::image::Image;
+use crate::{image::Image, report};
 use anyhow::{anyhow, Result};
 use data_encoding::HEXLOWER;
 use nix::{
     fcntl::{self, FlockArg},
-    ioctl_read, ioctl_readwrite, mount,
+    mount,
     unistd::Pid,
 };
 use openssl::{
     hash::{DigestBytes, Hasher, MessageDigest},
-    rand, sha,
+    rand,
     sign::Verifier,
     x509::X509,
 };
 use std::{
     collections::{HashMap, HashSet},
-    convert::TryInto,
     env,
     fs::{self, File},
     io::{self, BufRead, BufReader, Cursor, ErrorKind, Write},
-    mem::MaybeUninit,
     os::unix::fs as unixfs,
     os::unix::io::AsRawFd,
     path::{Path, PathBuf},
@@ -48,6 +46,7 @@ pub const ERR_RPC_CONTAINER_NOT_ALLOW_KILL: &str = "Signal not allowed";
 pub const ERR_RPC_NO_IMAGES: &str = "No images in current TD";
 pub const ERR_RPC_INVALID_LPOLICY_FORMAT: &str = "Invalid launch policy format";
 pub const ERR_RPC_INVALID_MALIAS_FORMAT: &str = "Invalid manifest alias format";
+pub const ERR_RPC_INVALID_REQUEST_TYPE: &str = "Invalid request type";
 #[cfg(not(feature = "interactive"))]
 pub const ERR_RPC_INVALID_TIMEOUT: &str = "Invalid timeout";
 pub const ERR_RPC_BUFFER_EXCEED: &str = "Stdin buffer size exceeds capture size";
@@ -55,8 +54,9 @@ pub const ERR_RPC_PRIVATE_ENTRYPOINT: &str = "Private entry point";
 pub const ERR_RPC_SYSTEM_ERROR: &str = "System error, errno: {}";
 pub const ERR_IPC_INVALID_REQUEST: &str = "Invalid structure format";
 pub const ERR_IPC_NOT_SUPPORTED: &str = "Request not supported";
+pub const ERR_ATTEST_NOT_SUPPORTED: &str = "Attestation not supported";
+pub const ERR_ATTEST_UNEXPECTED: &str = "Attestation unexpected error";
 
-const ATTEST_DEV_PATH: &str = "/dev/tdx_guest";
 const STORAGE_ROOT: &str = "/run/acond";
 const MEASURE_ROOT: &str = "/run/rtmr";
 const CONTENTS_DIR: &str = "contents";
@@ -74,12 +74,7 @@ const RTMR3_LOG: &str = "rtmr3.log";
 pub const SHA256: &str = "sha256";
 pub const SHA384: &str = "sha384";
 pub const SHA512: &str = "sha512";
-
 pub const BUFF_SIZE: usize = 0x400;
-pub const REPORT_DATA_SIZE: usize = 0x40;
-pub const REPORT_SIZE: usize = 0x400;
-pub const EXTEND_RTMR_DATA_SIZE: usize = 0x30;
-pub const NUM_RTMRS: i32 = 4;
 
 static CONTAINER_SERIES: AtomicUsize = AtomicUsize::new(1);
 
@@ -95,21 +90,6 @@ lazy_static! {
         m
     };
 }
-
-#[repr(C)]
-pub struct TdxReportReq {
-    reportdata: [u8; REPORT_DATA_SIZE],
-    tdreport: [u8; REPORT_SIZE],
-}
-
-#[repr(C)]
-pub struct TdxExtendRtmrReq {
-    data: [u8; EXTEND_RTMR_DATA_SIZE],
-    index: u8,
-}
-
-ioctl_readwrite!(get_tdx_report, b'T', 0x01, TdxReportReq);
-ioctl_read!(extend_tdx_rtmr, b'T', 0x03, TdxExtendRtmrReq);
 
 #[derive(Copy, Clone)]
 enum DAlgorithm {
@@ -266,44 +246,26 @@ pub fn measure_image(image_id: Option<&str>) -> Result<()> {
         Ok(())
     };
 
-    let extend_rtmr = |contents: &str| -> Result<()> {
-        let devf = match File::options().write(true).open(ATTEST_DEV_PATH) {
-            Ok(h) => Some(h),
-            Err(_) => {
-                eprintln!("TDX attestation device {} doesn't exist.", ATTEST_DEV_PATH);
-                None
-            }
-        };
-
-        if let Some(fd) = devf {
-            unsafe {
-                let mut req = MaybeUninit::<TdxExtendRtmrReq>::uninit();
-                (*req.as_mut_ptr()).data = sha::sha384(contents.to_string().as_bytes());
-                (*req.as_mut_ptr()).index = 3;
-
-                extend_tdx_rtmr(fd.as_raw_fd(), req.as_mut_ptr())?;
-            }
-        }
-
-        Ok(())
-    };
-
     let rtmr3_path = PathBuf::from(MEASURE_ROOT).join(RTMR3_LOG);
     if !rtmr3_path.exists() {
         let measurement_path = PathBuf::from(MEASURE_ROOT);
         fs::create_dir_all(measurement_path)?;
         File::create(&rtmr3_path)?;
 
-        extend_rtmr("INIT RTMR_INIT_VALUE")?;
-        write_exclusive(&rtmr3_path, "INIT RTMR_INIT_VALUE")?;
+        // hardcode temporarily
+        let contents = "INIT sha384/000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000";
+        report::extend_rtmr(contents)?;
+        write_exclusive(&rtmr3_path, contents)?;
     }
 
-    if let Some(bid) = image_id {
-        extend_rtmr(bid)?;
-        write_exclusive(&rtmr3_path, bid)?;
+    if let Some(id) = image_id {
+        let contents = format!("github.com/intel/ACON AddManifest {}", id);
+        report::extend_rtmr(contents.as_str())?;
+        write_exclusive(&rtmr3_path, contents.as_str())?;
     } else {
-        extend_rtmr("acon/final")?;
-        write_exclusive(&rtmr3_path, "acon/final")?;
+        let contents = "github.com/intel/ACON Finalize";
+        report::extend_rtmr(contents)?;
+        write_exclusive(&rtmr3_path, contents)?;
     }
 
     Ok(())
@@ -632,31 +594,6 @@ pub fn get_nounces(requestor_nonce_hi: u64, requestor_nonce_lo: u64) -> Result<(
     rand::rand_bytes(&mut acond_nonce)?;
 
     Ok((requestor_nonce.to_vec(), acond_nonce.to_vec()))
-}
-
-pub fn get_report(attest_data: &String) -> Result<[u8; REPORT_SIZE]> {
-    let devf = File::options()
-        .read(true)
-        .write(true)
-        .open(ATTEST_DEV_PATH)?;
-
-    let hash = sha::sha384(attest_data.as_bytes());
-    let mut hash_buf = hash.to_vec();
-
-    let mut zero_buf: Vec<u8> = vec![0; 16];
-    let mut report_data = vec![];
-    report_data.append(&mut hash_buf);
-    report_data.append(&mut zero_buf);
-
-    unsafe {
-        let mut req = MaybeUninit::<TdxReportReq>::uninit();
-        let source = report_data.try_into().unwrap();
-        (*req.as_mut_ptr()).reportdata.clone_from(&source);
-
-        get_tdx_report(devf.as_raw_fd(), req.as_mut_ptr())?;
-
-        Ok((*req.as_mut_ptr()).tdreport)
-    }
 }
 
 pub fn is_init_process(pid: i32) -> Result<bool> {

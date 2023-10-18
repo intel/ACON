@@ -78,6 +78,7 @@ message ContainerInfo {
 message ReportRequest {
     uint64 nonce_lo = 1;
     uint64 nonce_hi = 2;
+    uint32 request_type  = 3; // 0 is report and 1 is quote
 }
 
 message MrLog {
@@ -85,7 +86,7 @@ message MrLog {
 }
 
 message ReportResponse {
-    bytes report = 1;
+    bytes data = 1;
     map<uint32, MrLog> mrlog = 2;
     string attestation_data = 3;
 }
