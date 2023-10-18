@@ -78,7 +78,7 @@ message ContainerInfo {
 message ReportRequest {
     uint64 nonce_lo = 1;
     uint64 nonce_hi = 2;
-    uint32 data_type  = 3; // 0 is report and 1 is quote
+    uint32 request_type  = 3; // 0 is report and 1 is quote
 }
 
 message MrLog {

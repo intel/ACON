@@ -3,7 +3,7 @@
 
 use crate::utils;
 use anyhow::{anyhow, Result};
-use nix::{ioctl_readwrite, ioctl_write_ptr};
+use nix::{ioctl_read, ioctl_readwrite};
 use openssl::sha;
 use std::{
     convert::TryInto,
@@ -19,10 +19,7 @@ pub const REPORT_SIZE: usize = 0x400;
 pub const NUM_RTMRS: i32 = 4;
 
 const TDX_GUEST: &str = "/dev/tdx_guest";
-const HEADER_SIZE: usize = 4;
 const REQ_BUF_SIZE: usize = 0x4000;
-const GET_QUOTE_IN_FLIGHT: u64 = 0xffffffffffffffff;
-const GET_QUOTE_SERVICE_UNAVAILABLE: u64 = 0x8000000000000001;
 
 #[repr(C)]
 pub struct __IncompleteArrayField<T>(PhantomData<T>, [T; 0]);
@@ -39,13 +36,19 @@ pub struct TdxExtendRtmrReq {
     index: u8,
 }
 
-#[repr(C)]
+#[repr(packed)]
+struct TdxQuoteSubHdr {
+    size: u32,
+    _data: __IncompleteArrayField<u64>,
+}
+
+#[repr(packed)]
 struct TdxQuoteHdr {
     version: u64,
     status: u64,
     in_len: u32,
     out_len: u32,
-    data: __IncompleteArrayField<u64>, // Same as defined - https://github.com/intel/SGXDataCenterAttestationPrimitives/blob/master/QuoteGeneration/quote_wrapper/tdx_attest
+    sub_hdr: TdxQuoteSubHdr,
 }
 
 #[repr(C)]
@@ -55,8 +58,8 @@ pub struct TdxQuoteReq {
 }
 
 ioctl_readwrite!(tdx_get_report, b'T', 0x01, TdxReportReq);
-ioctl_write_ptr!(tdx_extend_rtmr, b'T', 0x03, TdxExtendRtmrReq);
-ioctl_readwrite!(tdx_get_quote, b'T', 0x04, TdxQuoteReq);
+ioctl_read!(tdx_extend_rtmr, b'T', 0x03, TdxExtendRtmrReq);
+ioctl_read!(tdx_get_quote, b'T', 0x04, TdxQuoteReq);
 
 pub fn extend_rtmr(contents: &str) -> Result<()> {
     let devf = match File::options().write(true).open(TDX_GUEST) {
@@ -85,9 +88,7 @@ pub fn get_report(attest_data: &String) -> Result<Vec<u8>> {
 
     let hash = sha::sha384(attest_data.as_bytes());
     let mut report_data = vec![0; REPORT_DATA_SIZE];
-    for i in 0..hash.len() {
-        report_data[i] = hash[i];
-    }
+    report_data[..hash.len()].copy_from_slice(&hash[..]);
 
     unsafe {
         let mut req = MaybeUninit::<TdxReportReq>::uninit();
@@ -102,19 +103,15 @@ pub fn get_report(attest_data: &String) -> Result<Vec<u8>> {
 
 pub fn get_quote(attest_data: &String) -> Result<Vec<u8>> {
     let report = get_report(attest_data)?;
-
     let devf = File::options().read(true).write(true).open(TDX_GUEST)?;
 
-    let (err, req) = qgs_msg_lib::qgs_msg_gen_get_quote_req(report.as_slice(), None);
-    if err != qgs_msg_lib::QGS_MSG_SUCCESS {
-        return Err(anyhow!(utils::ERR_ATTEST_UNEXPECTED));
-    }
-
-    let request = req.unwrap();
-    if request.len() > REQ_BUF_SIZE - HEADER_SIZE - mem::size_of::<TdxQuoteHdr>() {
+    let request = qgs_msg::create_get_quote_req(report.as_slice(), None)
+        .map_err(|_| anyhow!(utils::ERR_ATTEST_UNEXPECTED))?;
+    if request.len() > REQ_BUF_SIZE - mem::size_of::<TdxQuoteHdr>() {
         return Err(anyhow!(utils::ERR_ATTEST_NOT_SUPPORTED));
     }
 
+    let header_size = mem::size_of::<TdxQuoteSubHdr>() as u32;
     let request_size = request.len() as u32;
     let mut buf = vec![0u8; REQ_BUF_SIZE];
     let tdx_quote_hdr = buf.as_mut_ptr() as *mut TdxQuoteHdr;
@@ -122,17 +119,12 @@ pub fn get_quote(attest_data: &String) -> Result<Vec<u8>> {
     unsafe {
         (*tdx_quote_hdr).version = 1;
         (*tdx_quote_hdr).status = 0;
-        (*tdx_quote_hdr).in_len = HEADER_SIZE as u32 + request_size;
+        (*tdx_quote_hdr).in_len = header_size + request_size;
         (*tdx_quote_hdr).out_len = 0;
+        (*tdx_quote_hdr).sub_hdr.size = request_size.to_be();
 
-        let mut data_index = mem::size_of::<TdxQuoteHdr>();
-        for i in 0..HEADER_SIZE {
-            buf[data_index + i] = ((request_size >> (HEADER_SIZE - 1 - i) * 8) & 0xFF) as u8;
-        }
-        data_index += HEADER_SIZE;
-        for i in 0..request.len() {
-            buf[data_index + i] = request[i];
-        }
+        let data_offset = mem::size_of::<TdxQuoteHdr>();
+        buf[data_offset..(data_offset + request.len())].copy_from_slice(&request[..]);
 
         let mut req = MaybeUninit::<TdxQuoteReq>::uninit();
         (*req.as_mut_ptr()).buf = tdx_quote_hdr as u64;
@@ -140,55 +132,63 @@ pub fn get_quote(attest_data: &String) -> Result<Vec<u8>> {
 
         tdx_get_quote(devf.as_raw_fd(), req.as_mut_ptr())?;
 
-        if (*tdx_quote_hdr).status != 0 || (*tdx_quote_hdr).out_len < HEADER_SIZE as u32 {
-            match (*tdx_quote_hdr).status {
-                GET_QUOTE_IN_FLIGHT => return Err(anyhow!(utils::ERR_ATTEST_BUSY)),
-                GET_QUOTE_SERVICE_UNAVAILABLE => {
-                    return Err(anyhow!(utils::ERR_ATTEST_NOT_SUPPORTED))
-                }
-                _ => return Err(anyhow!(utils::ERR_ATTEST_UNEXPECTED)),
-            }
-        }
-
-        let mut msg_size: u32 = 0;
-        for i in 0..HEADER_SIZE {
-            msg_size = msg_size * 256 + (buf[mem::size_of::<TdxQuoteHdr>() + i] & 0xFF) as u32;
-        }
-        if msg_size != (*tdx_quote_hdr).out_len - HEADER_SIZE as u32 {
+        if (*tdx_quote_hdr).status != 0 || (*tdx_quote_hdr).out_len < header_size {
             return Err(anyhow!(utils::ERR_ATTEST_UNEXPECTED));
         }
 
-        let (err, quote, _) = qgs_msg_lib::qgs_msg_inflate_get_quote_resp(
-            &buf[data_index..data_index + msg_size as usize],
-        );
-        if err != qgs_msg_lib::QGS_MSG_SUCCESS {
+        (*tdx_quote_hdr).sub_hdr.size = (*tdx_quote_hdr).sub_hdr.size.to_be();
+        if (*tdx_quote_hdr).sub_hdr.size != (*tdx_quote_hdr).out_len - header_size {
             return Err(anyhow!(utils::ERR_ATTEST_UNEXPECTED));
         }
 
-        Ok(quote.unwrap())
+        let (quote, _) = qgs_msg::inflate_get_quote_resp(
+            &buf[data_offset..data_offset + (*tdx_quote_hdr).sub_hdr.size as usize],
+        )
+        .map_err(|_| anyhow!(utils::ERR_ATTEST_UNEXPECTED))?;
+
+        Ok(quote)
     }
 }
 
-mod qgs_msg_lib {
+mod qgs_msg {
     use super::__IncompleteArrayField;
     use std::mem;
 
-    pub const QGS_MSG_SUCCESS: u32 = 0x0000; // Success
-    #[allow(dead_code)]
-    pub const QGS_MSG_ERROR_UNEXPECTED: u32 = 0x00012001; // Unexpected error
-    #[allow(dead_code)]
-    pub const QGS_MSG_ERROR_OUT_OF_MEMORY: u32 = 0x00012002; // Not enough memory is available to complete this operation
-    pub const QGS_MSG_ERROR_INVALID_PARAMETER: u32 = 0x00012003; // The parameter is incorrect
-    pub const QGS_MSG_ERROR_INVALID_VERSION: u32 = 0x00012004; // Unrecognized version of serialized data
-    pub const QGS_MSG_ERROR_INVALID_TYPE: u32 = 0x00012005; // Invalid message type found
-    pub const QGS_MSG_ERROR_INVALID_SIZE: u32 = 0x00012006; // Invalid message size found
-    pub const QGS_MSG_ERROR_INVALID_CODE: u32 = 0x00012007; // Invalid error code
-    pub const QGS_MSG_ERROR_MAX: u32 = 0x00012008; // Indicate max error to allow better translation.
+    const MAJOR_VER: u16 = 1;
+    const MINOR_VER: u16 = 0;
+    const GET_QUOTE_REQ: u32 = 0;
+    const GET_QUOTE_RESP: u32 = 1;
 
-    const QGS_MSG_LIB_MAJOR_VER: u16 = 1;
-    const QGS_MSG_LIB_MINOR_VER: u16 = 0;
-    const QGS_MSG_GET_QUOTE_REQ: u32 = 0;
-    const QGS_MSG_GET_QUOTE_RESP: u32 = 1;
+    #[rustfmt::skip]
+    #[allow(dead_code)]
+    pub enum MessageStatus {
+        Success,               // Success
+        ErrorUnexpected,       // Unexpected error
+        ErrorOutOfmemory,      // Not enough memory is available to complete this operation
+        ErrorInvalidParameter, // The parameter is incorrect
+        ErrorInvalidVersion,   // Unrecognized version of serialized data
+        ErrorInvalidType,      // Invalid message type found
+        ErrorInvalidSize,      // Invalid message size found
+        ErrorInvalidCode,      // Invalid error code
+        ErrorMax,              // Indicate max error to allow better translation.
+    }
+
+    impl MessageStatus {
+        #[rustfmt::skip]
+        fn value(&self) -> u32 {
+            match self {
+                MessageStatus::Success               => 0x0,
+                MessageStatus::ErrorUnexpected       => 0x00012001,
+                MessageStatus::ErrorOutOfmemory      => 0x00012002,
+                MessageStatus::ErrorInvalidParameter => 0x00012003,
+                MessageStatus::ErrorInvalidVersion   => 0x00012004,
+                MessageStatus::ErrorInvalidType      => 0x00012005,
+                MessageStatus::ErrorInvalidSize      => 0x00012006,
+                MessageStatus::ErrorInvalidCode      => 0x00012007,
+                MessageStatus::ErrorMax              => 0x00012008,
+            }
+        }
+    }
 
     #[repr(C)]
     struct QgsMsgHeader {
@@ -215,103 +215,97 @@ mod qgs_msg_lib {
         id_quote: __IncompleteArrayField<u8>, // selected id followed by quote
     }
 
-    pub fn qgs_msg_gen_get_quote_req(
+    pub fn create_get_quote_req(
         report: &[u8],
         id_list: Option<&[u8]>,
-    ) -> (u32, Option<Vec<u8>>) {
+    ) -> Result<Vec<u8>, MessageStatus> {
         if report.len() != super::REPORT_SIZE {
-            return (QGS_MSG_ERROR_INVALID_PARAMETER, None);
+            return Err(MessageStatus::ErrorInvalidParameter);
         }
 
-        if id_list.is_some() && id_list.unwrap().len() == 0 {
-            return (QGS_MSG_ERROR_INVALID_PARAMETER, None);
+        if id_list.is_some() && id_list.unwrap().is_empty() {
+            return Err(MessageStatus::ErrorInvalidParameter);
         }
 
-        let report_size = report.len() as u32;
-        let id_list_size = if let Some(list) = id_list {
-            list.len() as u32
-        } else {
-            0
-        };
+        let report_size = report.len();
+        let id_list_size = id_list.map_or(0, |list| list.len());
 
-        let mut buf_size = mem::size_of::<QgsMsgGetQuoteReq>() as u32;
+        let mut buf_size = mem::size_of::<QgsMsgGetQuoteReq>();
         buf_size += report_size;
         buf_size += id_list_size;
 
-        let mut buf = vec![0u8; buf_size as usize];
-        let qgs_msg_get_quote_req = buf.as_mut_ptr() as *mut QgsMsgGetQuoteReq;
+        let mut buf = vec![0u8; buf_size];
+        let get_quote_req = buf.as_mut_ptr() as *mut QgsMsgGetQuoteReq;
         unsafe {
-            (*qgs_msg_get_quote_req).header.major_version = QGS_MSG_LIB_MAJOR_VER;
-            (*qgs_msg_get_quote_req).header.minor_version = QGS_MSG_LIB_MINOR_VER;
-            (*qgs_msg_get_quote_req).header.header_type = QGS_MSG_GET_QUOTE_REQ;
-            (*qgs_msg_get_quote_req).header.size = buf_size;
-            (*qgs_msg_get_quote_req).header.error_code = 0;
-            (*qgs_msg_get_quote_req).report_size = report_size;
-            (*qgs_msg_get_quote_req).id_list_size = id_list_size;
+            (*get_quote_req).header.major_version = MAJOR_VER;
+            (*get_quote_req).header.minor_version = MINOR_VER;
+            (*get_quote_req).header.header_type = GET_QUOTE_REQ;
+            (*get_quote_req).header.size = buf_size as u32;
+            (*get_quote_req).header.error_code = 0;
+            (*get_quote_req).report_size = report_size as u32;
+            (*get_quote_req).id_list_size = id_list_size as u32;
 
-            let mut report_id_list_index = mem::size_of::<QgsMsgGetQuoteReq>();
-            for i in 0..report_size as usize {
-                buf[report_id_list_index + i] = report[i];
-            }
-            report_id_list_index += report_size as usize;
+            let mut offset = mem::size_of::<QgsMsgGetQuoteReq>();
+            buf[offset..(offset + report_size)].copy_from_slice(&report[..report_size]);
+
             if let Some(list) = id_list {
-                for i in 0..list.len() {
-                    buf[report_id_list_index + i] = list[i];
-                }
+                offset += report_size;
+                buf[offset..(offset + list.len())].copy_from_slice(list);
             }
         }
 
-        return (QGS_MSG_SUCCESS, Some(buf));
+        Ok(buf)
     }
 
-    pub fn qgs_msg_inflate_get_quote_resp(
+    pub fn inflate_get_quote_resp(
         serialized_resp: &[u8],
-    ) -> (u32, Option<Vec<u8>>, Option<Vec<u8>>) {
+    ) -> Result<(Vec<u8>, Option<Vec<u8>>), MessageStatus> {
         if serialized_resp.len() < mem::size_of::<QgsMsgGetQuoteResp>() {
-            return (QGS_MSG_ERROR_INVALID_PARAMETER, None, None);
+            return Err(MessageStatus::ErrorInvalidParameter);
         }
 
-        let qgs_msg_get_quote_resp = serialized_resp.as_ptr() as *const QgsMsgGetQuoteResp;
+        let get_quote_resp = serialized_resp.as_ptr() as *const QgsMsgGetQuoteResp;
         unsafe {
-            if (*qgs_msg_get_quote_resp).header.major_version != QGS_MSG_LIB_MAJOR_VER {
-                return (QGS_MSG_ERROR_INVALID_VERSION, None, None);
+            if (*get_quote_resp).header.major_version != MAJOR_VER {
+                return Err(MessageStatus::ErrorInvalidVersion);
             }
-            if (*qgs_msg_get_quote_resp).header.header_type != QGS_MSG_GET_QUOTE_RESP {
-                return (QGS_MSG_ERROR_INVALID_TYPE, None, None);
+            if (*get_quote_resp).header.header_type != GET_QUOTE_RESP {
+                return Err(MessageStatus::ErrorInvalidType);
             }
-            if (*qgs_msg_get_quote_resp).header.size != serialized_resp.len() as u32 {
-                return (QGS_MSG_ERROR_INVALID_SIZE, None, None);
+            if (*get_quote_resp).header.size != serialized_resp.len() as u32 {
+                return Err(MessageStatus::ErrorInvalidSize);
             }
 
             let mut size = mem::size_of::<QgsMsgGetQuoteResp>() as u32;
-            size += (*qgs_msg_get_quote_resp).selected_id_size;
-            size += (*qgs_msg_get_quote_resp).quote_size;
+            size += (*get_quote_resp).selected_id_size;
+            size += (*get_quote_resp).quote_size;
 
-            if (*qgs_msg_get_quote_resp).header.size != size {
-                return (QGS_MSG_ERROR_INVALID_SIZE, None, None);
+            if (*get_quote_resp).header.size != size {
+                return Err(MessageStatus::ErrorInvalidSize);
             }
 
-            if (*qgs_msg_get_quote_resp).header.error_code == QGS_MSG_SUCCESS {
-                if (*qgs_msg_get_quote_resp).quote_size == 0 {
-                    return (QGS_MSG_ERROR_INVALID_SIZE, None, None);
+            if (*get_quote_resp).header.error_code == MessageStatus::Success.value() {
+                if (*get_quote_resp).quote_size == 0 {
+                    return Err(MessageStatus::ErrorInvalidSize);
                 }
 
-                let mut id_quote_index = mem::size_of::<QgsMsgGetQuoteResp>();
-                let quote = serialized_resp[id_quote_index
-                    ..id_quote_index + (*qgs_msg_get_quote_resp).quote_size as usize]
+                let mut offset = mem::size_of::<QgsMsgGetQuoteResp>();
+                let quote = serialized_resp[offset..offset + (*get_quote_resp).quote_size as usize]
                     .to_vec();
-                id_quote_index += (*qgs_msg_get_quote_resp).quote_size as usize;
-                let selected_id = if (*qgs_msg_get_quote_resp).selected_id_size != 0 {
-                    Some(serialized_resp[id_quote_index..].to_vec())
-                } else {
-                    None
+
+                let selected_id = match (*get_quote_resp).selected_id_size {
+                    0 => None,
+                    _ => {
+                        offset += (*get_quote_resp).quote_size as usize;
+                        Some(serialized_resp[offset..].to_vec())
+                    }
                 };
 
-                return (QGS_MSG_SUCCESS, Some(quote), selected_id);
-            } else if (*qgs_msg_get_quote_resp).header.error_code < QGS_MSG_ERROR_MAX {
-                return (QGS_MSG_ERROR_INVALID_SIZE, None, None);
+                Ok((quote, selected_id))
+            } else if (*get_quote_resp).header.error_code < MessageStatus::ErrorMax.value() {
+                Err(MessageStatus::ErrorInvalidSize)
             } else {
-                return (QGS_MSG_ERROR_INVALID_CODE, None, None);
+                Err(MessageStatus::ErrorInvalidCode)
             }
         }
     }

@@ -35,7 +35,7 @@ struct AconMessageErr {
 #[derive(Debug, Clone, Copy)]
 struct AconGetReportReq {
     header: AconMessageHdr, // command = 0
-    data_type: u32,         // 0 is report and 1 is quote
+    request_type: u32,      // 0 is report and 1 is quote
     nonce: [u64; 2],
     attest_data_type: i32, // 0 = no data; 1 = binary; 2 = string; others = reserved
 }
@@ -93,7 +93,7 @@ impl AconService {
     async fn get_report(
         &self,
         uid: u32,
-        data_type: u32,
+        request_type: u32,
         nonce: [u64; 2],
         attest_data_type: i32,
         attest_data: String,
@@ -114,15 +114,16 @@ impl AconService {
             )),
         )?;
 
-        match data_type {
+        match request_type {
             0 => {
                 let report = report::get_report(&attest_data)?;
                 Ok((report::NUM_RTMRS, attest_data, report))
             }
-            _ => {
+            1 => {
                 let quote = report::get_quote(&attest_data)?;
                 Ok((report::NUM_RTMRS, attest_data, quote))
             }
+            _ => Err(anyhow!(utils::ERR_RPC_INVALID_REQUEST_TYPE)),
         }
     }
 
@@ -138,15 +139,15 @@ impl AconService {
 }
 
 unsafe fn bytes_to_string(data: &[u8]) -> String {
-    str::from_utf8_unchecked(&data[0..data.iter().position(|&c| c == b'\0').unwrap_or(data.len())])
+    str::from_utf8_unchecked(&data[..data.iter().position(|&c| c == b'\0').unwrap_or(data.len())])
         .into()
 }
 
 fn error_to_vec(command: i32, err: &str) -> Vec<u8> {
     let err_bytes = err.as_bytes();
-    let err_bytes_offset = mem::size_of::<AconMessageErr>();
+    let offset = mem::size_of::<AconMessageErr>();
 
-    let mut msg_err_bytes: Vec<u8> = vec![0; err_bytes_offset + err_bytes.len()];
+    let mut msg_err_bytes: Vec<u8> = vec![0; offset + err_bytes.len()];
     let msg_err = msg_err_bytes.as_mut_ptr() as *mut AconMessageErr;
     unsafe {
         (*msg_err).header.command = -1; // Not know errno.
@@ -154,47 +155,45 @@ fn error_to_vec(command: i32, err: &str) -> Vec<u8> {
         (*msg_err).request = command;
     }
 
-    for i in 0..err_bytes.len() {
-        msg_err_bytes[err_bytes_offset + i] = err_bytes[i];
-    }
-
+    msg_err_bytes[offset..(offset + err_bytes.len())].copy_from_slice(err_bytes);
     msg_err_bytes
 }
 
 async fn handle_request(stream: UnixStream, tx: mpsc::Sender<Request>) -> Result<()> {
     let mut req_bytes: Vec<u8> = vec![0; mem::size_of::<AconReq>()];
-    let mut req_bytes_offset = 0;
+    let mut offset = 0;
     let mut data_size = 0;
 
     loop {
         stream.readable().await?;
-        match stream.try_read(&mut req_bytes[req_bytes_offset..]) {
+        match stream.try_read(&mut req_bytes[offset..]) {
             Ok(n) => {
-                if req_bytes_offset == 0 {
+                if offset == 0 {
                     data_size =
-                        unsafe { (*(req_bytes.as_mut_ptr() as *mut AconMessageHdr)).size as usize };
+                        unsafe { (*(req_bytes.as_ptr() as *const AconMessageHdr)).size as usize };
+                    req_bytes.resize(data_size, 0);
                 }
 
-                if req_bytes_offset + n >= data_size {
+                if offset + n >= data_size {
                     break;
                 }
 
-                req_bytes_offset += n;
-                req_bytes.resize(data_size, 0);
+                offset += n;
             }
             Err(ref e) if e.kind() == ErrorKind::WouldBlock => continue,
             Err(e) => return Err(e.into()),
         }
     }
 
-    let resp_bytes = {
-        if data_size < mem::size_of::<AconMessageHdr>() {
+    let resp_bytes = match data_size {
+        size if size < mem::size_of::<AconMessageHdr>() => {
             utils::ERR_IPC_INVALID_REQUEST.as_bytes().to_vec()
-        } else {
+        }
+        _ => {
             let (resp_tx, resp_rx) = oneshot::channel();
             let request = Request {
-                command: unsafe { (*(req_bytes.as_mut_ptr() as *mut AconMessageHdr)).command },
-                bytes: req_bytes[0..data_size as usize].to_vec(),
+                command: unsafe { (*(req_bytes.as_ptr() as *const AconMessageHdr)).command },
+                bytes: req_bytes[..data_size].to_vec(),
                 uid: stream.peer_cred()?.uid(),
                 resp_tx,
             };
@@ -236,10 +235,10 @@ async fn monitor_request(pod: Arc<RwLock<Pod>>, mut rx: mpsc::Receiver<Request>)
 async fn dispatch_request(request: &Request, service: &AconService) -> Result<Vec<u8>> {
     match request.command {
         0 => {
-            let (data_type, attest_nonce, attest_data_type, attest_data) = unsafe {
+            let (request_type, attest_nonce, attest_data_type, attest_data) = unsafe {
                 let get_report_req = request.bytes.as_ptr() as *const AconGetReportReq;
                 (
-                    (*get_report_req).data_type,
+                    (*get_report_req).request_type,
                     (*get_report_req).nonce,
                     (*get_report_req).attest_data_type,
                     bytes_to_string(&request.bytes[mem::size_of::<AconGetReportReq>()..]),
@@ -249,7 +248,7 @@ async fn dispatch_request(request: &Request, service: &AconService) -> Result<Ve
             match service
                 .get_report(
                     request.uid,
-                    data_type,
+                    request_type,
                     attest_nonce,
                     attest_data_type,
                     attest_data,
@@ -272,12 +271,9 @@ async fn dispatch_request(request: &Request, service: &AconService) -> Result<Ve
                         (*get_report_resp).data_offset = data_offset as i32;
                     }
 
-                    for i in 0..attest_data_bytes.len() {
-                        resp_bytes[attest_json_offset + i] = attest_data_bytes[i];
-                    }
-                    for i in 0..data.len() {
-                        resp_bytes[data_offset + i] = data[i];
-                    }
+                    resp_bytes[attest_json_offset..(attest_json_offset + attest_data_bytes.len())]
+                        .copy_from_slice(attest_data_bytes);
+                    resp_bytes[data_offset..(data_offset + data.len())].copy_from_slice(&data[..]);
 
                     Ok(resp_bytes)
                 }

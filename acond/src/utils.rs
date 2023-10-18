@@ -46,6 +46,7 @@ pub const ERR_RPC_CONTAINER_NOT_ALLOW_KILL: &str = "Signal not allowed";
 pub const ERR_RPC_NO_IMAGES: &str = "No images in current TD";
 pub const ERR_RPC_INVALID_LPOLICY_FORMAT: &str = "Invalid launch policy format";
 pub const ERR_RPC_INVALID_MALIAS_FORMAT: &str = "Invalid manifest alias format";
+pub const ERR_RPC_INVALID_REQUEST_TYPE: &str = "Invalid request type";
 #[cfg(not(feature = "interactive"))]
 pub const ERR_RPC_INVALID_TIMEOUT: &str = "Invalid timeout";
 pub const ERR_RPC_BUFFER_EXCEED: &str = "Stdin buffer size exceeds capture size";
@@ -55,7 +56,6 @@ pub const ERR_IPC_INVALID_REQUEST: &str = "Invalid structure format";
 pub const ERR_IPC_NOT_SUPPORTED: &str = "Request not supported";
 pub const ERR_ATTEST_NOT_SUPPORTED: &str = "Attestation not supported";
 pub const ERR_ATTEST_UNEXPECTED: &str = "Attestation unexpected error";
-pub const ERR_ATTEST_BUSY: &str = "Attestation busy";
 
 const STORAGE_ROOT: &str = "/run/acond";
 const MEASURE_ROOT: &str = "/run/rtmr";
@@ -252,16 +252,20 @@ pub fn measure_image(image_id: Option<&str>) -> Result<()> {
         fs::create_dir_all(measurement_path)?;
         File::create(&rtmr3_path)?;
 
-        report::extend_rtmr("INIT RTMR_INIT_VALUE")?;
-        write_exclusive(&rtmr3_path, "INIT RTMR_INIT_VALUE")?;
+        // hardcode temporarily
+        let contents = "INIT sha384/000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000";
+        report::extend_rtmr(contents)?;
+        write_exclusive(&rtmr3_path, contents)?;
     }
 
-    if let Some(bid) = image_id {
-        report::extend_rtmr(bid)?;
-        write_exclusive(&rtmr3_path, bid)?;
+    if let Some(id) = image_id {
+        let contents = format!("github.com/intel/ACON AddManifest {}", id);
+        report::extend_rtmr(contents.as_str())?;
+        write_exclusive(&rtmr3_path, contents.as_str())?;
     } else {
-        report::extend_rtmr("acon/final")?;
-        write_exclusive(&rtmr3_path, "acon/final")?;
+        let contents = "github.com/intel/ACON Finalize";
+        report::extend_rtmr(contents)?;
+        write_exclusive(&rtmr3_path, contents)?;
     }
 
     Ok(())
