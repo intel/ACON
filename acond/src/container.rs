@@ -22,7 +22,7 @@ use nix::{
 };
 #[cfg(not(feature = "interactive"))]
 use std::os::unix::io::{FromRawFd, RawFd};
-use std::{collections::HashMap, ffi::CString, fs, mem, path::Path, process, sync::Arc};
+use std::{collections::HashMap, env, ffi::CString, fs, mem, path::Path, process, sync::Arc};
 use tokio::sync::Notify;
 #[cfg(not(feature = "interactive"))]
 use tokio::{
@@ -36,30 +36,6 @@ pub const MAX_BUFF_LEN: usize = 128 * BUFF_SIZE;
 const EPPATH: &str = "/lib/acon/entrypoint.d/";
 
 lazy_static! {
-    pub static ref ERRNO: HashMap<i32, &'static str> = {
-        let mut map = HashMap::new();
-        map.insert(1, "EPERM: Operation not permitted.");
-        map.insert(2, "ENOENT: No such file or directory.");
-        map.insert(3, "ESRCH: No such process.");
-        map.insert(4, "EINTR: Interrupted system call.");
-        map.insert(5, "EIO: Input/output error.");
-        map.insert(6, "ENXIO: No such device or address.");
-        map.insert(7, "E2BIG: Argument list too long.");
-        map.insert(8, "ENOEXEC: Exec format error.");
-        map.insert(9, "EBADF: Bad file descriptor.");
-        map.insert(10, "ECHILD: No child processes.");
-        map.insert(11, "EAGAIN: Resource temporarily unavailable.");
-        map.insert(12, "ENOMEM: Cannot allocate memory.");
-        map.insert(13, "EACCES: Permission denied.");
-        map.insert(14, "EFAULT: Bad address.");
-        map.insert(15, "ENOTBLK: Block device required.");
-        map.insert(16, "EBUSY: Device or resource busy.");
-        map.insert(17, "EEXIST: File exists.");
-        map.insert(18, "EXDEV: Invalid cross-device link.");
-        map.insert(19, "ENODEV: No such device.");
-        map.insert(20, "ENOTDIR: Not a directory.");
-        map
-    };
     pub static ref ROOTFS_MOUNTS: Vec<RootMount> = vec![
         RootMount {
             source: Some("/dev"),
@@ -120,6 +96,7 @@ struct ExecArgs {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ConfigArgs {
     overlay_fs: String,
+    writable_fs: bool,
     work_dir: String,
     uids: HashMap<u32, u32>,
 }
@@ -153,6 +130,7 @@ impl Container {
             child_pid: None,
             config_args: Some(ConfigArgs {
                 overlay_fs,
+                writable_fs: image.manifest.writable_fs,
                 work_dir: image.manifest.working_dir.clone(),
                 uids: uids.clone(),
             }),
@@ -193,6 +171,7 @@ impl Container {
             child_pid: None,
             config_args: Some(ConfigArgs {
                 overlay_fs,
+                writable_fs: image.manifest.writable_fs,
                 work_dir: image.manifest.working_dir.clone(),
                 uids: self.uids.clone().unwrap(),
             }),
@@ -364,13 +343,9 @@ fn create_child(fork_args: &ForkArgs) -> Result<Pid> {
             let mut buf: [u8; mem::size_of::<i32>()] = Default::default();
             if unistd::read(prdfd, &mut buf)? != 0 {
                 let errno = i32::from_be_bytes(buf);
-                if let Some(msg) = ERRNO.get(&errno) {
-                    return Err(anyhow!(msg.to_owned()));
-                } else {
-                    return Err(anyhow!(
-                        utils::ERR_RPC_SYSTEM_ERROR.replace("{}", format!("{}", errno).as_str())
-                    ));
-                }
+                return Err(anyhow!(
+                    utils::ERR_RPC_SYSTEM_ERROR.replace("{}", format!("{}", errno).as_str())
+                ));
             }
 
             #[cfg(feature = "interactive")]
@@ -449,6 +424,17 @@ fn run_child(fork_args: &ForkArgs, slave: Option<i32>, cwrfd: i32, crdfd: i32) -
             )?;
         }
 
+        if config_args.writable_fs {
+            for entry in walkdir::WalkDir::new("./") {
+                let path = entry?.into_path();
+                if let Err(errno) = unistd::chown(&path, Some(uid), Some(gid)) {
+                    if errno == Errno::EPERM || errno == Errno::ENOENT {
+                        continue;
+                    }
+                }
+            }
+        }
+
         unistd::setresgid(gid, gid, gid)?;
         unistd::setresuid(uid, uid, uid)?;
 
@@ -484,19 +470,11 @@ fn run_child(fork_args: &ForkArgs, slave: Option<i32>, cwrfd: i32, crdfd: i32) -
 
     unistd::chroot(&rootfs)?;
     if let Some(config_args) = fork_args.config_args.as_ref() {
-        unistd::chdir(config_args.work_dir.as_str()).or_else(|errno| {
+        if let Err(errno) = unistd::chdir(config_args.work_dir.as_str()) {
             if errno == Errno::ENOENT {
                 unistd::chdir("/")?;
             }
-
-            if let Some(msg) = ERRNO.get(&(errno as i32)) {
-                Err(anyhow!(msg))
-            } else {
-                Err(anyhow!(
-                    utils::ERR_RPC_SYSTEM_ERROR.replace("{}", format!("{}", errno).as_str())
-                ))
-            }
-        })?;
+        }
     } else {
         unistd::chdir("/")?;
     }
@@ -516,11 +494,6 @@ fn exec_child(exec_args: &ExecArgs, cwrfd: i32) -> ! {
         .iter()
         .map(|arg| arg.as_str())
         .collect::<Vec<_>>();
-    let env_vars = exec_args
-        .envs
-        .iter()
-        .map(|var| var.as_str())
-        .collect::<Vec<_>>();
 
     let cpath = CString::new(args[0]).unwrap_or_default();
 
@@ -530,20 +503,20 @@ fn exec_child(exec_args: &ExecArgs, cwrfd: i32) -> ! {
         .collect::<Vec<_>>();
     let rcargs = cargs.iter().map(|s| s.as_c_str()).collect::<Vec<_>>();
 
-    let cenv_vars = env_vars
-        .iter()
-        .map(|s| CString::new(*s).unwrap_or_default())
-        .collect::<Vec<_>>();
-    let rcenv_vars = cenv_vars.iter().map(|s| s.as_c_str()).collect::<Vec<_>>();
+    for (key, _) in env::vars_os() {
+        env::remove_var(key);
+    }
+    for e in exec_args.envs.iter() {
+        if let Some((key, value)) = e.split_once('=') {
+            env::set_var(key, value);
+        }
+    }
 
-    let _ = unistd::execvpe(cpath.as_c_str(), rcargs.as_slice(), rcenv_vars.as_slice()).map_err(
-        |err| {
-            let errno = err as i32;
-
-            let _ = unistd::write(cwrfd, &errno.to_be_bytes());
-            process::exit(errno);
-        },
-    );
+    let _ = unistd::execvp(cpath.as_c_str(), rcargs.as_slice()).map_err(|err| {
+        let errno = err as i32;
+        let _ = unistd::write(cwrfd, &errno.to_be_bytes());
+        process::exit(errno);
+    });
 
     unreachable!()
 }
