@@ -22,7 +22,8 @@ var statusCmd = &cobra.Command{
 	Short:   "Show status of ACON TDs/VMs and containers",
 	GroupID: "runtime",
 	Long: `
-Show status of all ACON TDs/VMs running in the local platform and containers running in them.
+Show status of all ACON TDs/VMs on the local platform and containers running in
+them.
 `,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
