@@ -20,7 +20,7 @@ use crate::{
     container::{self, CStatus, Container},
     image::{Image, Manifest},
     pod::Pod,
-    utils, vsock_incoming,
+    report, utils, vsock_incoming,
 };
 
 mod grpc {
@@ -350,7 +350,7 @@ impl AconService for TDAconService {
             .get_image(&container.image_id)
             .ok_or_else(|| Status::invalid_argument(utils::ERR_RPC_INVALID_IMAGE_ID))?;
 
-        if let None = image.manifest.signals.iter().find(|&&s| s == signal_num) {
+        if !image.manifest.signals.iter().any(|&s| s == signal_num) {
             return Err(Status::permission_denied(
                 utils::ERR_RPC_CONTAINER_NOT_ALLOW_KILL,
             ));
@@ -468,16 +468,20 @@ impl AconService for TDAconService {
             .get_attestation_data(requestor_nonce, acond_nonce, None)
             .map_err(|e| Status::unknown(e.to_string()))?;
 
-        let report = utils::get_report(&attestation_data)
-            .map_err(|e| Status::unknown(e.to_string()))?
-            .to_vec();
+        let data = match request.get_ref().request_type {
+            0 => report::get_report(&attestation_data).map_err(|e| Status::unknown(e.to_string())),
+            1 => report::get_quote(&attestation_data).map_err(|e| Status::unknown(e.to_string())),
+            _ => Err(Status::invalid_argument(
+                utils::ERR_RPC_INVALID_REQUEST_TYPE,
+            )),
+        }?;
 
         if let Some(tx) = &pod.timeout_tx {
             let _ = tx.send(false).await;
         }
 
         Ok(Response::new(ReportResponse {
-            report,
+            data,
             mrlog,
             attestation_data,
         }))

@@ -249,7 +249,7 @@ impl Container {
 
         #[cfg(not(feature = "interactive"))]
         if _timeout == 0 {
-            return Err(anyhow!(utils::ERR_RPC_INVALID_TIMEOUT));
+            Err(anyhow!(utils::ERR_RPC_INVALID_TIMEOUT))
         } else {
             let (crdstdin, pwrstdin) = unistd::pipe()?;
             fcntl::fcntl(pwrstdin, FcntlArg::F_SETFD(FdFlag::FD_CLOEXEC))?;
@@ -390,11 +390,9 @@ fn create_child(fork_args: &ForkArgs) -> Result<Pid> {
             unistd::write(cwrfd, &i32::from(pid).to_be_bytes())?;
             process::exit(0);
         }
-        Err(errno) => {
-            return Err(anyhow!(
-                utils::ERR_RPC_SYSTEM_ERROR.replace("{}", format!("{}", errno).as_str())
-            ));
-        }
+        Err(errno) => Err(anyhow!(
+            utils::ERR_RPC_SYSTEM_ERROR.replace("{}", format!("{}", errno).as_str())
+        )),
     }
 }
 

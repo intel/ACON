@@ -38,6 +38,7 @@ mod mount;
 mod pod;
 #[cfg(feature = "interactive")]
 mod pty;
+mod report;
 mod rpc;
 mod unix_incoming;
 mod utils;
