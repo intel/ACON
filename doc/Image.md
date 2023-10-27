@@ -738,7 +738,7 @@ The `env` rules are considered logical-OR'ed together - i.e., an environment var
 
 An environment variable may appear multiple times in `env`, in which case the first rule determines the default value if not set (i.e., absent in the *Container* start request from the untrusted entity).
 
-**Note**: The general form of environment strings - `ENVVAR=VALUE`, is a **convention** not enforced by [`execve(2)`][man-execve.2]. That is, atypical environment strings like `"=no_name"`, `"no_value="`, `"no_equal_sign"` will all be accepted by [`execve(2)`][man-execve.2], but would seldom be accepted/used by applications. `acond` considers `"=no_name"` and `"no_equal_sign"` as invalid, and interprets `"no_value="` as a request to unset an environment variable that has a default non-empty value.
+**Note**: The general form of environment strings - `ENVVAR=VALUE`, is a **convention** not enforced by [`execve(2)`][man-execve.2]. That is, atypical environment strings like `"=no_name"`, `"no_value="`, `"no_equal_sign"` will all be accepted by [`execve(2)`][man-execve.2], but would seldom be accepted/used by applications. `acond` always considers `"=no_name"` invalid, while considers `"no_equal_sign"` valid only in a manifest (to allow any value), and interprets `"no_value="` as a request to unset an environment variable that has a default non-empty value.
 
 Below we use examples to demonstrate how rules can be combined in various use cases.
 

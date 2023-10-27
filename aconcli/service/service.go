@@ -147,7 +147,7 @@ func Inspect(sc pb.AconServiceClient, cid uint32) ([]AconStatus, error) {
 	return result, nil
 }
 
-func Report(sc pb.AconServiceClient, nonceLo, nonceHi uint64) (report []byte,
+func Report(sc pb.AconServiceClient, nonceLo, nonceHi uint64) (data []byte,
 	mrlog0 []string, mrlog1 []string, mrlog2 []string, mrlog3 []string, attest_data string, e error) {
 	ctx, cancel := context.WithTimeout(context.Background(), defaultServiceTimeout)
 	defer cancel()
@@ -157,7 +157,7 @@ func Report(sc pb.AconServiceClient, nonceLo, nonceHi uint64) (report []byte,
 		e = err
 		return
 	}
-	report = r.GetReport()
+	data = r.GetData()
 	mrlogs := r.GetMrlog()
 	mrlog0 = mrlogs[0].GetLogs()
 	mrlog1 = mrlogs[1].GetLogs()
