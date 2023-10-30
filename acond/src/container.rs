@@ -17,7 +17,10 @@ use nix::{
     libc,
     mount::{self, MsFlags},
     sched::{self, CloneFlags},
-    sys::{stat::Mode, wait},
+    sys::{
+        socket::{self, AddressFamily, SockFlag, SockType},
+        stat::Mode,
+    },
     unistd::{self, ForkResult, Gid, Pid, Uid},
 };
 #[cfg(not(feature = "interactive"))]
@@ -292,13 +295,17 @@ fn create_child(fork_args: &ForkArgs) -> Result<Pid> {
         pseudo
     };
 
-    let (prdfd, cwrfd) = unistd::pipe2(OFlag::O_CLOEXEC)?;
-    let (crdfd, pwrfd) = unistd::pipe2(OFlag::O_CLOEXEC)?;
+    let (psock, csock) = socket::socketpair(
+        AddressFamily::Unix,
+        SockType::Stream,
+        None,
+        SockFlag::SOCK_NONBLOCK,
+    )?;
+
     match unsafe { unistd::fork() } {
-        Ok(ForkResult::Parent { child, .. }) => {
+        Ok(ForkResult::Parent { child: _, .. }) => {
             defer! {
-                let _ = unistd::close(prdfd);
-                let _ = unistd::close(pwrfd);
+                let _ = unistd::close(psock);
 
                 if let Some(stdin) = fork_args.stdin {
                     let _ = unistd::close(stdin);
@@ -310,21 +317,15 @@ fn create_child(fork_args: &ForkArgs) -> Result<Pid> {
                     let _ = unistd::close(stderr);
                 }
             }
-            unistd::close(crdfd)?;
-            unistd::close(cwrfd)?;
+            unistd::close(csock)?;
 
             let child_pid = {
                 let mut buf: [u8; mem::size_of::<i32>()] = Default::default();
-                unistd::read(prdfd, &mut buf)?;
+                unistd::read(psock, &mut buf)?;
                 i32::from_be_bytes(buf)
             };
 
-            wait::waitpid(child, None)?;
-
             if fork_args.child_pid.is_none() {
-                let buf: &mut [u8] = &mut [0];
-                unistd::read(prdfd, buf)?;
-
                 let mut contents = String::new();
                 if let Some(config_args) = fork_args.config_args.as_ref() {
                     for (key, value) in config_args.uids.iter() {
@@ -337,11 +338,11 @@ fn create_child(fork_args: &ForkArgs) -> Result<Pid> {
                 fs::write(format!("/proc/{}/uid_map", child_pid), contents.as_str())?;
                 fs::write(format!("/proc/{}/gid_map", child_pid), contents.as_str())?;
 
-                unistd::write(pwrfd, &[0])?;
+                unistd::write(psock, &[0])?;
             }
 
             let mut buf: [u8; mem::size_of::<i32>()] = Default::default();
-            if unistd::read(prdfd, &mut buf)? != 0 {
+            if unistd::read(psock, &mut buf)? != 0 {
                 let errno = i32::from_be_bytes(buf);
                 return Err(anyhow!(
                     utils::ERR_RPC_SYSTEM_ERROR.replace("{}", format!("{}", errno).as_str())
@@ -358,11 +359,10 @@ fn create_child(fork_args: &ForkArgs) -> Result<Pid> {
         }
         Ok(ForkResult::Child) => {
             #[cfg(not(feature = "interactive"))]
-            let pid = run_child(fork_args, None, cwrfd, crdfd)?;
+            run_child(fork_args, None, csock)?;
             #[cfg(feature = "interactive")]
-            let pid = run_child(fork_args, Some(pseudo.slave), cwrfd, crdfd)?;
+            run_child(fork_args, Some(pseudo.slave), csock)?;
 
-            unistd::write(cwrfd, &i32::from(pid).to_be_bytes())?;
             process::exit(0);
         }
         Err(errno) => Err(anyhow!(
@@ -371,7 +371,7 @@ fn create_child(fork_args: &ForkArgs) -> Result<Pid> {
     }
 }
 
-fn run_child(fork_args: &ForkArgs, slave: Option<i32>, cwrfd: i32, crdfd: i32) -> Result<Pid> {
+fn run_child(fork_args: &ForkArgs, slave: Option<i32>, csock: i32) -> Result<Pid> {
     if let Some(stdin) = fork_args.stdin {
         unistd::dup2(stdin, libc::STDIN_FILENO)?;
     }
@@ -458,11 +458,9 @@ fn run_child(fork_args: &ForkArgs, slave: Option<i32>, cwrfd: i32, crdfd: i32) -
         }
     }
 
+    unistd::write(csock, &process::id().to_be_bytes())?;
     if fork_args.child_pid.is_none() {
-        unistd::write(cwrfd, &[0])?;
-        let buf: &mut [u8] = &mut [0];
-        unistd::read(crdfd, buf)?;
-
+        unistd::read(csock, &mut [0])?;
         for m in ROOTFS_MOUNTS.iter() {
             mount::mount(m.source, m.target, m.fstype, m.flags, m.option)?;
         }
@@ -485,10 +483,10 @@ fn run_child(fork_args: &ForkArgs, slave: Option<i32>, cwrfd: i32, crdfd: i32) -
         }
     }
 
-    exec_child(&fork_args.exec_args, cwrfd);
+    exec_child(&fork_args.exec_args, csock);
 }
 
-fn exec_child(exec_args: &ExecArgs, cwrfd: i32) -> ! {
+fn exec_child(exec_args: &ExecArgs, csock: i32) -> ! {
     let args = exec_args
         .args
         .iter()
@@ -514,7 +512,7 @@ fn exec_child(exec_args: &ExecArgs, cwrfd: i32) -> ! {
 
     let _ = unistd::execvp(cpath.as_c_str(), rcargs.as_slice()).map_err(|err| {
         let errno = err as i32;
-        let _ = unistd::write(cwrfd, &errno.to_be_bytes());
+        let _ = unistd::write(csock, &errno.to_be_bytes());
         process::exit(errno);
     });
 
