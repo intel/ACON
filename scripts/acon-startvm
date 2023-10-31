@@ -1,0 +1,57 @@
+#!/bin/sh
+# Copyright © 2023 Intel Corporation
+# SPDX-License-Identifier: Apache-2.0
+
+dump_env() {
+    while test $# -gt 0; do
+        eval "local readonly _V=\${$1:-(not\ set)}"
+        printf '%s\t= %s\t# %s\n' $1 "$_V" "$2"
+        shift 2
+    done |
+    column -t -s"$(printf '\t')"
+}
+
+host_fwd() {
+    local fwd_rules=
+    for v in $(echo $1|cut -d, -f1- --output-delimiter=' '); do
+        fwd_rules=$fwd_rules,hostfwd=tcp::${v%%:*}-:${v##*:}
+    done
+    echo $fwd_rules
+}
+
+test -n "$ATD_CID" && test $ATD_CID -le 2 && ATD_CID=$$
+
+CMD="${ATD_QEMU:=qemu-kvm} -nographic                                   \
+    -name process=aconvm-$$                                             \
+    -accel kvm                                                          \
+    ${ATD:+-object tdx-guest,id=tdx}                                    \
+    ${ATD:+-object memory-backend-memfd-private,id=ram1,size=${ATD_MEMSZ:=1g}}  \
+    -machine q35${ATD:+,memory-backend=ram1,kernel_irqchip=split,confidential-guest-support=tdx}    \
+    -cpu host,-kvm-steal-time,pmu=off                                   \
+    -smp ${ATD_NVP:=1}                                                  \
+    -m ${ATD_MEMSZ:=1g}                                                 \
+    -nodefaults -vga none -no-hpet                                      \
+    -nic user,model=virtio,ipv6=off,ipv4=on,hostname=${ATD:+td-}${ATD:-vm}$(host_fwd $ATD_TCPFWD)   \
+    ${ATD_CID:+-device vhost-vsock-pci,guest-cid=$ATD_CID}              \
+    -bios ${ATD_BIOS:=/usr/share/qemu/OVMF.fd}                          \
+    -chardev stdio,id=mux,mux=on,signal=off                             \
+    -device virtio-serial,max_ports=1 -device virtconsole,chardev=mux   \
+    -serial chardev:mux                                                 \
+    -monitor chardev:mux                                                \
+    -append \"ip=dhcp console=hvc0 earlyprintk=ttyS0 ${ATD_CID:+acond.vsock_conn} $ATD_KPARAMS\"    \
+    -initrd ${ATD_RD:=$(dirname $0)/initrd.img}                         \
+    -kernel \"${ATD_KERNEL:=$(dirname $0)/vmlinuz}\""
+
+dump_env    \
+    ATD         "launch ${ATD:+td-}${ATD:-vm}"          \
+    ATD_QEMU    "QEMU executable"                       \
+    ATD_CID     "VSOCK CID"                             \
+    ATD_MEMSZ   "memory size"                           \
+    ATD_NVP     "number of virtual processors"          \
+    ATD_TCPFWD  "TCP port forwarding rules"             \
+    ATD_BIOS    "BIOS image path"                       \
+    ATD_RD      "initrd image path"                     \
+    ATD_KERNEL  "kernel path"                           \
+    ATD_KPARAMS "additional kernel cmdline parameters"  >&2
+
+eval exec $CMD

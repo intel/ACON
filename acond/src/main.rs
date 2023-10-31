@@ -21,7 +21,7 @@ use nix::{
     unistd::{self, Pid},
 };
 
-use std::{env, fs, mem, path::Path, sync::Arc};
+use std::{env, fs, io::ErrorKind, mem, os::unix::fs as unixfs, path::Path, sync::Arc};
 use tokio::{
     runtime::Builder,
     signal::unix as tokio_unix,
@@ -45,6 +45,12 @@ mod utils;
 mod vsock_incoming;
 
 lazy_static! {
+    pub static ref SOFT_LINKS: Vec<(&'static str, &'static str)> = vec![
+        ("/proc/self/fd", "/dev/fd"),
+        ("/proc/self/fd/0", "/dev/stdin"),
+        ("/proc/self/fd/1", "/dev/stdout"),
+        ("/proc/self/fd/2", "/dev/stderr")
+    ];
     pub static ref ROOTFS_MOUNTS: Vec<RootMount> = vec![
         RootMount {
             source: None,
@@ -248,6 +254,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             nix_mount::mount(m.source, m.target, m.fstype, m.flags, m.option)?;
         }
+    }
+
+    for (original, link) in SOFT_LINKS.iter() {
+        unixfs::symlink(original, link).or_else(|e| match e {
+            ref e if e.kind() == ErrorKind::AlreadyExists => Ok(()),
+            _ => Err(e),
+        })?;
     }
 
     let rt = Builder::new_current_thread().enable_all().build()?;

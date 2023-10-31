@@ -15,6 +15,7 @@ import (
 	"aconcli/repo"
 	"aconcli/service"
 	"aconcli/vm"
+
 	"github.com/spf13/cobra"
 )
 
@@ -30,26 +31,32 @@ var (
 )
 
 var runCmd = &cobra.Command{
-	Use:     "run <manifest-file>...",
+	Use:     "run [manifest]...",
 	Short:   "Start ACON containers",
 	GroupID: "runtime",
 	Long: `
-Start ACON container(s) in a new (indicated by '-n' flag) or existing
-(indicated by '-c' flag) ACON virtual machine using specified ACON
-images which can be specified on the command line either as a list of
-manifest files or using flag '-A', which means all the ACON images in
-the repository.
+Start ACON container(s) in a new or existing ACON TD/VM.
 
-The script file to launch the VM can be specified using '-f' flag. If
-not specified, the default one from aconcli installation will be used.
-initrd and kernel image can be separately specified using environment
-variables 'ACON_STARTVM_PARAM_RAMDISK' and 'ACON_STARTVM_PARAM_KERNEL'
-respectively. If not specified, default images from aconcli installation
-will be used.
+ACON images (identified by their manifests) can be listed explicitly on the
+command line, in which case all specified images will be started.
 
-ACON container can run in the foreground with '-i' flag to facilitate
-debugging. Additional environment variables inside container can be
-specified using '--env' flag`,
+Alternatively, the flag '-A' can be supplied to simply start all executable
+ACON images in the current repo.
+
+'aconcli run' invokes an external executable whenever it needs to launch a new
+ACON TD/VM. The flag '-f' can be used to specified the path to that executbale,
+or if omitted, the default is 'acon-startvm' in the same directory as where
+'aconcli' resides.
+
+'aconcli run' passes arguments to 'acon-startvm' (or its substitute specified
+by '-f') via environment variables, listed below. More details are available in
+comments inside the default 'acon-startvm' script file
+
+- ATD_TCPFWD - TCP forwarding rules.
+
+ACON containers may run in the foreground (the flag '-i') to facilitate
+debugging.
+`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return run(args)
 	},
@@ -166,7 +173,7 @@ func prepareEnvVsock() []string {
 
 func prepareEnvTcp(connTarget string) []string {
 	return []string{
-		fmt.Sprintf("ACON_STARTVM_PARAM_TCPFWD=%v:1025", connTarget)}
+		fmt.Sprintf("ATD_TCPFWD=%v:1025", connTarget)}
 }
 
 func run(args []string) error {
@@ -191,7 +198,7 @@ func run(args []string) error {
 	if startnew {
 		env := os.Environ()
 		if !strings.HasPrefix(vmConnTarget, ":") {
-			cid := os.Getenv("CID")
+			cid := os.Getenv("ATD_CID")
 			vsock_env := prepareEnvVsock()
 			env = append(env, vsock_env...)
 			vmConnTarget = fmt.Sprintf("vsock://%v:%v", cid, vmConnTarget)
@@ -257,32 +264,37 @@ func run(args []string) error {
 }
 
 func init() {
+	exe, err := os.Executable()
+	if err != nil {
+		log.Fatalf("Failed to determine path to aconcli executable: %v", err)
+	}
+
 	rootCmd.AddCommand(runCmd)
 
 	runCmd.Flags().BoolVarP(&startnew, "new", "n", false,
-		"start the container in a new ACON virtual machine")
+		"start a new ACON TD/VM")
 
 	runCmd.Flags().BoolVarP(&debug, "interactive", "i", false,
-		"bring virtual machine to the foreground for debugging")
+		"run ACON TD/VM in foreground (usually for debugging)")
 
 	runCmd.Flags().BoolVarP(&loadRepo, "all", "A", false,
-		"load/start ACON containers from all the images in the ACON repository")
+		"load/start all images in the current ACON image repo")
 
 	runCmd.Flags().BoolVarP(&autoload, "auto", "a", false,
-		"automatically load depending ACON images during container loading process")
+		"load dependencies automatically")
 
 	runCmd.Flags().StringSliceVarP(&loadonly, "loadonly", "l", nil,
-		"containers to be loaded only")
+		"load (but do not start) the specified images")
 
 	runCmd.Flags().StringVarP(&vmConnTarget, "connect", "c", "",
-		"start the container in an existing VM specified by the connect target")
+		"connect target url")
 
 	runCmd.Flags().IntVarP(&timetolive, "timetolive", "t", 60,
-		"timeout in seconds for the newly created VM to exist")
+		"shut down the TD/VM after being idle for specified number of seconds")
 
-	runCmd.Flags().StringVarP(&startfile, "file", "f", "",
-		"path of the script file used to launch the virtual machine")
+	runCmd.Flags().StringVarP(&startfile, "file", "f", filepath.Join(filepath.Dir(exe), "acon-startvm"),
+		"path to the executable for launching ACON TD/VM")
 
 	runCmd.Flags().StringSliceVar(&env, "env", nil,
-		"environment variables to be used inside the container")
+		"set environment variables inside new containers")
 }
