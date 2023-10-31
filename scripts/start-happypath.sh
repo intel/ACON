@@ -99,7 +99,7 @@ run_workload() {
     }
 
     log_note "Create initrd"
-    chmod +w initrd.d/init && cp "$acon_root/acond/target/release/acond" initrd.d/bin/acond
+    cp "$acon_root/acond/target/release/acond" initrd.d/bin/acond
     create_initrd initrd.d/ ./initrd.img || {
         log_error "create_initrd failed"
     }
@@ -140,7 +140,7 @@ run_workload() {
     }
 
     log_note "run TDVM"
-    cp "$acon_root/scripts/acon-startvm" . && ATD_BIOS=OVMF.fd ATD_KERNEL=kernel.img ./aconcli run -n "$docker_id.json" -c :5532 || {
+    ATD_BIOS=OVMF.fd ATD_KERNEL=kernel.img ./aconcli run -n "$docker_id.json" -f "$acon_root/scripts/acon-startvm" -c :5532 || {
         log_error "Run TDVM error will stop ACON instances"
         ./aconcli shutdown -f tcp://:5532
         return 2
@@ -152,4 +152,3 @@ run_workload() {
     log_note "Stop ACON instances"
     ./aconcli shutdown -f tcp://:5532
 }
-
