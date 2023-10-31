@@ -140,7 +140,7 @@ run_workload() {
     }
 
     log_note "run TDVM"
-    ATD_BIOS=OVMF.fd ATD_KERNEL=kernel.img ./aconcli run -n "$docker_id.json" -f "$acon_root/scripts/acon-startvm" -c :5532 || {
+    cp "$acon_root/aconcli/acon-startvm" . && ATD_BIOS=OVMF.fd ATD_KERNEL=kernel.img ./aconcli run -n "$docker_id.json" -c :5532 || {
         log_error "Run TDVM error will stop ACON instances"
         ./aconcli shutdown -f tcp://:5532
         return 2
