@@ -86,20 +86,19 @@ run_workload() {
     }
 
     log_note "Build acond"
-    source "$acon_root/scripts/acon-build.env" && U=. start_rust_buildenv -- ./build_static -r -Ffull || {
+    source "$acon_root/scripts/acon-build.env" && U=. start_rust_buildenv -- ./build_static -r || {
         log_error "Build acond error or timeout"
         return 2
     }
     
 
     log_note "Generate initrd"
-    cd ../$bundle_dir && mkdir initrd.d && gen_initrd initrd.d busybox:latest || {
+    cd ../$bundle_dir && mkdir initrd.d && INIT=/bin/acond gen_initrd initrd.d busybox:latest || {
         log_error "gen_initrd failed"
         return 2
     }
 
     log_note "Create initrd"
-    chmod +w initrd.d/init && sed -i 's@/bin/sh -il@/bin/acond@g' initrd.d/init
     cp "$acon_root/acond/target/release/acond" initrd.d/bin/acond
     create_initrd initrd.d/ ./initrd.img || {
         log_error "create_initrd failed"
@@ -124,8 +123,8 @@ run_workload() {
         return 2
     }
 
-    log_note "Append WritableFs:true to manifest"
-    sed -i 's/"writableFS": false,/"writableFS": true,/' "$docker_id.json" || {
+    log_note "Modify manifest file"
+    cat <<< $(jq ".writableFS=true | .uids += [1]" busybox.json) > "$docker_id.json" || {
         log_error "Append WritableFs:true to manifest failed"
         return 2
     }
@@ -141,7 +140,7 @@ run_workload() {
     }
 
     log_note "run TDVM"
-    cp "$acon_root/aconcli/acon-startvm" . && ./aconcli run -n "$docker_id.json" -c :5532 || {
+    ATD_BIOS=OVMF.fd ATD_KERNEL=kernel.img ATD_RD=initrd.img ./aconcli run -n "$docker_id.json" -c :5532 -f "$acon_root/scripts/acon-startvm" || {
         log_error "Run TDVM error will stop ACON instances"
         ./aconcli shutdown -f tcp://:5532
         return 2
@@ -149,6 +148,9 @@ run_workload() {
 
     log_note "Get TDVM status"
     ./aconcli status
+
+    log_note "Invoke TDVM"
+    ./aconcli invoke -c tcp://:5532 -e 1 Whoami
 
     log_note "Stop ACON instances"
     ./aconcli shutdown -f tcp://:5532
