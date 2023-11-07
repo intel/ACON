@@ -299,7 +299,7 @@ fn create_child(fork_args: &ForkArgs) -> Result<Pid> {
         AddressFamily::Unix,
         SockType::Stream,
         None,
-        SockFlag::SOCK_NONBLOCK,
+        SockFlag::SOCK_CLOEXEC,
     )?;
 
     match unsafe { unistd::fork() } {
@@ -335,9 +335,10 @@ fn create_child(fork_args: &ForkArgs) -> Result<Pid> {
                 } else {
                     contents.push_str(format!("0 {} 1", fork_args.container_id).as_str());
                 }
+
+                unistd::read(psock, &mut [0])?;
                 fs::write(format!("/proc/{}/uid_map", child_pid), contents.as_str())?;
                 fs::write(format!("/proc/{}/gid_map", child_pid), contents.as_str())?;
-
                 unistd::write(psock, &[0])?;
             }
 
@@ -359,10 +360,11 @@ fn create_child(fork_args: &ForkArgs) -> Result<Pid> {
         }
         Ok(ForkResult::Child) => {
             #[cfg(not(feature = "interactive"))]
-            run_child(fork_args, None, csock)?;
+            let pid = run_child(fork_args, None, csock)?;
             #[cfg(feature = "interactive")]
-            run_child(fork_args, Some(pseudo.slave), csock)?;
+            let pid = run_child(fork_args, Some(pseudo.slave), csock)?;
 
+            unistd::write(csock, &i32::from(pid).to_be_bytes())?;
             process::exit(0);
         }
         Err(errno) => Err(anyhow!(
@@ -458,9 +460,10 @@ fn run_child(fork_args: &ForkArgs, slave: Option<i32>, csock: i32) -> Result<Pid
         }
     }
 
-    unistd::write(csock, &process::id().to_be_bytes())?;
     if fork_args.child_pid.is_none() {
+        unistd::write(csock, &[0])?;
         unistd::read(csock, &mut [0])?;
+
         for m in ROOTFS_MOUNTS.iter() {
             mount::mount(m.source, m.target, m.fstype, m.flags, m.option)?;
         }
