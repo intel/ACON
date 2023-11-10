@@ -39,11 +39,12 @@ log_error() {
 }
 
 get_options() {
-    while getopts "d:i:f:h" opt; do
+    while getopts "d:i:f:j:h" opt; do
         case $opt in
             d) bundle_dir="$OPTARG";;
             i) docker_id="$OPTARG";;
             f) docker_file="$OPTARG";;
+            j) jq_string="$OPTARG";;
             h) opt_h=1
                echo "Usage: run_workload -d bundle_dir -i container -f docker_file [-h]"
                ;;
@@ -60,6 +61,10 @@ run_workload() {
     if [ "$opt_h" == 1 ]; then
         return 0
     fi
+
+    test -v "$jq_string" || {
+        jq_string=".writableFS=true"
+    }
 
     test -d "$bundle_dir" && {
         log_warn "$bundle_dir directory already exist and will be cleared" 
@@ -119,12 +124,12 @@ run_workload() {
 
     log_note "Generate Manifest"
     ./aconcli generate -o "$docker_id.json" "$docker_id" || {
-        log_note "Generate Manifest error"
+        log_error "Generate Manifest error"
         return 2
     }
 
     log_note "Modify manifest file"
-    cat <<< $(jq ".writableFS=true | .uids += [1]" busybox.json) > "$docker_id.json" || {
+    cat <<< $(jq "$jq_string" "$docker_id.json") > "$docker_id.json" || {
         log_error "Append WritableFs:true to manifest failed"
         return 2
     }
