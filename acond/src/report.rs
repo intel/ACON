@@ -106,7 +106,7 @@ pub fn get_quote(attest_data: &String) -> Result<Vec<u8>> {
     let devf = File::options().read(true).write(true).open(TDX_GUEST)?;
 
     let request = qgs_msg::create_get_quote_req(report.as_slice(), None)
-        .map_err(|_| anyhow!(utils::ERR_ATTEST_UNEXPECTED))?;
+        .map_err(|_| anyhow!(utils::ERR_UNEXPECTED))?;
     if request.len() > REQ_BUF_SIZE - mem::size_of::<TdxQuoteHdr>() {
         return Err(anyhow!(utils::ERR_ATTEST_NOT_SUPPORTED));
     }
@@ -133,18 +133,18 @@ pub fn get_quote(attest_data: &String) -> Result<Vec<u8>> {
         tdx_get_quote(devf.as_raw_fd(), req.as_mut_ptr())?;
 
         if (*tdx_quote_hdr).status != 0 || (*tdx_quote_hdr).out_len < header_size {
-            return Err(anyhow!(utils::ERR_ATTEST_UNEXPECTED));
+            return Err(anyhow!(utils::ERR_UNEXPECTED));
         }
 
         (*tdx_quote_hdr).sub_hdr.size = (*tdx_quote_hdr).sub_hdr.size.to_be();
         if (*tdx_quote_hdr).sub_hdr.size != (*tdx_quote_hdr).out_len - header_size {
-            return Err(anyhow!(utils::ERR_ATTEST_UNEXPECTED));
+            return Err(anyhow!(utils::ERR_UNEXPECTED));
         }
 
         let (quote, _) = qgs_msg::inflate_get_quote_resp(
             &buf[data_offset..data_offset + (*tdx_quote_hdr).sub_hdr.size as usize],
         )
-        .map_err(|_| anyhow!(utils::ERR_ATTEST_UNEXPECTED))?;
+        .map_err(|_| anyhow!(utils::ERR_UNEXPECTED))?;
 
         Ok(quote)
     }

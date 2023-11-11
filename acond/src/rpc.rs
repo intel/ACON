@@ -1,35 +1,89 @@
 // Copyright (C) 2023 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 
-use grpc::acon_service_server::{AconService, AconServiceServer};
-use grpc::{
-    AddBlobRequest, AddManifestRequest, AddManifestResponse, ContainerInfo, ExecRequest,
-    ExecResponse, GetManifestRequest, GetManifestResponse, InspectRequest, InspectResponse,
-    KillRequest, MrLog, ReportRequest, ReportResponse, RestartRequest, StartRequest, StartResponse,
-};
-use nix::errno::Errno;
-use std::{collections::HashMap, sync::Arc};
-use tokio::{
-    sync::RwLock,
-    time::{self, Duration},
-};
-use tokio_vsock::VsockListener;
-use tonic::{transport::Server, Request, Response, Status};
-
-use crate::{
-    container::{self, CStatus, Container},
-    image::{Image, Manifest},
-    pod::Pod,
-    report, utils, vsock_incoming,
-};
-
 mod grpc {
     tonic::include_proto!("acon.grpc");
 }
 
+use anyhow::{anyhow, Result};
+use grpc::acon_service_server::{AconService, AconServiceServer};
+use grpc::{
+    AddBlobRequest, AddManifestRequest, AddManifestResponse, ExecRequest, ExecResponse,
+    GetManifestRequest, GetManifestResponse, InspectRequest, InspectResponse, KillRequest,
+    ReportRequest, ReportResponse, RestartRequest, StartRequest, StartResponse,
+};
+use nix::unistd;
+use std::{
+    io::Write,
+    os::unix::{io::AsRawFd, net::UnixStream as StdUnixStream},
+    sync::Arc,
+};
+use tempfile::NamedTempFile;
+use tokio::{net::UnixStream, sync::Mutex};
+use tokio_send_fd::SendFd;
+use tokio_vsock::VsockListener;
+use tonic::{transport::Server, Request, Response, Status};
+
+use crate::{
+    io as acond_io,
+    server::{AcondError, Code},
+    utils, vsock_incoming,
+};
+
+const DEBUG_SOCK_PATH: &str = "/tmp/acon.sock";
+
 #[derive(Clone)]
 struct TDAconService {
-    pod: Arc<RwLock<Pod>>,
+    stream: Arc<Mutex<UnixStream>>,
+}
+
+impl TDAconService {
+    fn new(stream: UnixStream) -> Self {
+        Self {
+            stream: Arc::new(Mutex::new(stream)),
+        }
+    }
+
+    async fn send_recv(&self, command: u8, buf: &mut Vec<u8>) -> Result<Vec<u8>> {
+        buf.insert(0, command);
+        let mut send_buf = (buf.len() as u32).to_ne_bytes().to_vec();
+        send_buf.append(buf);
+
+        acond_io::write_async_lock(self.stream.clone(), &send_buf).await?;
+        let recv_buf = acond_io::read_async_lock(self.stream.clone()).await?;
+
+        if recv_buf.is_empty() {
+            return Err(anyhow!(utils::ERR_UNEXPECTED));
+        }
+        Ok(recv_buf)
+    }
+
+    async fn send_recv2(
+        &self,
+        command: u8,
+        buf: &mut Vec<u8>,
+        file: &NamedTempFile,
+    ) -> Result<Vec<u8>> {
+        buf.insert(0, command);
+        let mut send_buf = (buf.len() as u32).to_ne_bytes().to_vec();
+        send_buf.append(buf);
+
+        acond_io::write_async_lock(self.stream.clone(), &send_buf).await?;
+        {
+            let ref_stream = self.stream.clone();
+            let stream = ref_stream.lock().await;
+            stream.send_fd(file.as_raw_fd()).await?;
+
+            unistd::close(file.as_raw_fd()).map_err(|_| Status::unknown(utils::ERR_UNEXPECTED))?;
+            unistd::unlink(file.path()).map_err(|_| Status::unknown(utils::ERR_UNEXPECTED))?;
+        }
+        let recv_buf = acond_io::read_async_lock(self.stream.clone()).await?;
+
+        if recv_buf.is_empty() {
+            return Err(anyhow!(utils::ERR_UNEXPECTED));
+        }
+        Ok(recv_buf)
+    }
 }
 
 // implementing rpc for service defined in .proto
@@ -39,489 +93,261 @@ impl AconService for TDAconService {
         &self,
         request: Request<AddManifestRequest>,
     ) -> Result<Response<AddManifestResponse>, Status> {
-        let manifest_bytes = request.get_ref().manifest.as_bytes();
-        let signature_bytes = request.get_ref().signature.as_slice();
-        let signer_bytes = request.get_ref().certificate.as_slice();
+        let mut request_buf: Vec<u8> = bincode::serialize(request.get_ref())
+            .map_err(|_| Status::unknown(utils::ERR_UNEXPECTED))?;
+        let response_buf = self
+            .send_recv(1, &mut request_buf)
+            .await
+            .map_err(|_| Status::unknown(utils::ERR_UNEXPECTED))?;
 
-        let ref_pod = self.pod.clone();
-        let mut pod = ref_pod.write().await;
-
-        if pod.finalized {
-            return Err(Status::permission_denied(utils::ERR_RPC_MANIFEST_FINALIZED));
+        match response_buf[0] {
+            0 => {
+                let response = bincode::deserialize(&response_buf[1..])
+                    .map_err(|_| Status::unknown(utils::ERR_UNEXPECTED))?;
+                Ok(Response::new(response))
+            }
+            1 => {
+                let status = get_status(&response_buf[1..])
+                    .map_err(|_| Status::unknown(utils::ERR_UNEXPECTED))?;
+                Err(status)
+            }
+            _ => Err(Status::unknown(utils::ERR_UNEXPECTED)),
         }
-
-        let verified = utils::verify_signature(manifest_bytes, signature_bytes, signer_bytes)
-            .map_err(|e| Status::unknown(e.to_string()))?;
-
-        if !verified {
-            return Err(Status::invalid_argument(utils::ERR_RPC_INVALID_SIGNATURE));
-        }
-
-        // verify contents of manifest.
-        // ex. layers can't be duplicated.
-        // entrypoint mustn't be empty.
-
-        let (hash_algorithm, signer_digest) = utils::calc_certificate_digest(signer_bytes)
-            .map_err(|e| Status::unknown(e.to_string()))?;
-
-        let (image_id, manifest_digest) =
-            utils::calc_image_digest(&hash_algorithm, &signer_digest, manifest_bytes)
-                .map_err(|e| Status::unknown(e.to_string()))?;
-
-        let manifest: Manifest =
-            serde_json::from_slice(manifest_bytes).map_err(|e| Status::unknown(e.to_string()))?;
-
-        let missing_layers = utils::get_missing_layers(&image_id, &manifest.layers)
-            .map_err(|e| Status::unknown(e.to_string()))?;
-
-        if pod.get_image(&image_id).is_some() {
-            return Ok(Response::new(AddManifestResponse {
-                image_id,
-                missing_layers,
-            }));
-        }
-
-        let image = Image {
-            id: image_id.clone(),
-            hash_algorithm,
-            signer_digest,
-            signer_bytes: signer_bytes.to_vec(),
-            manifest_digest,
-            manifest,
-        };
-
-        let is_accepted = pod
-            .is_manifest_accepted(&image)
-            .map_err(|e| Status::unknown(e.to_string()))?;
-        if !is_accepted {
-            return Err(Status::permission_denied(
-                utils::ERR_RPC_INCOMPATIBLE_POLICY,
-            ));
-        }
-
-        utils::create_alias_link(&image).map_err(|e| Status::unknown(e.to_string()))?;
-
-        utils::measure_image(Some(&image_id)).map_err(|e| Status::unknown(e.to_string()))?;
-
-        utils::setup_image_dtree(&image, manifest_bytes)
-            .map_err(|e| Status::unknown(e.to_string()))?;
-
-        pod.add_image(image);
-
-        if let Some(tx) = &pod.timeout_tx {
-            let _ = tx.send(false).await;
-        }
-
-        Ok(Response::new(AddManifestResponse {
-            image_id,
-            missing_layers,
-        }))
     }
 
     async fn finalize(&self, _: Request<()>) -> Result<Response<()>, Status> {
-        let ref_pod = self.pod.clone();
-        let mut pod = ref_pod.write().await;
+        let mut request_buf: Vec<u8> = vec![0; 0];
+        let response_buf = self
+            .send_recv(2, &mut request_buf)
+            .await
+            .map_err(|_| Status::unknown(utils::ERR_UNEXPECTED))?;
 
-        if pod.finalized {
-            return Err(Status::permission_denied(utils::ERR_RPC_MANIFEST_FINALIZED));
+        match response_buf[0] {
+            0 => Ok(Response::new(())),
+            1 => {
+                let status = get_status(&response_buf[1..])
+                    .map_err(|_| Status::unknown(utils::ERR_UNEXPECTED))?;
+                Err(status)
+            }
+            _ => Err(Status::unknown(utils::ERR_UNEXPECTED)),
         }
-
-        utils::measure_image(None).map_err(|e| Status::unknown(e.to_string()))?;
-
-        pod.finalized = true;
-
-        if let Some(tx) = &pod.timeout_tx {
-            let _ = tx.send(false).await;
-        }
-
-        Ok(Response::new(()))
     }
 
     async fn add_blob(&self, request: Request<AddBlobRequest>) -> Result<Response<()>, Status> {
-        let algorithm = request.get_ref().alg;
-        let data = request.get_ref().data.as_slice();
+        let mut file = NamedTempFile::new().map_err(|_| Status::unknown(utils::ERR_UNEXPECTED))?;
+        file.write_all(&request.get_ref().data)
+            .map_err(|_| Status::unknown(utils::ERR_UNEXPECTED))?;
 
-        let layers =
-            utils::calc_blob_digest(algorithm, data).map_err(|e| Status::unknown(e.to_string()))?;
+        let inner_request = AddBlobRequest {
+            alg: request.get_ref().alg,
+            data: vec![],
+        };
+        let mut request_buf: Vec<u8> = bincode::serialize(&inner_request)
+            .map_err(|_| Status::unknown(utils::ERR_UNEXPECTED))?;
+        let response_buf = self
+            .send_recv2(3, &mut request_buf, &file)
+            .await
+            .map_err(|_| Status::unknown(utils::ERR_UNEXPECTED))?;
 
-        let ref_pod = self.pod.clone();
-        let pod = ref_pod.read().await;
-        if !pod.is_blob_accepted(&layers) {
-            return Err(Status::permission_denied(utils::ERR_RPC_REJECT_BLOB));
+        match response_buf[0] {
+            0 => Ok(Response::new(())),
+            1 => {
+                let status = get_status(&response_buf[1..])
+                    .map_err(|_| Status::unknown(utils::ERR_UNEXPECTED))?;
+                Err(status)
+            }
+            _ => Err(Status::unknown(utils::ERR_UNEXPECTED)),
         }
-
-        utils::save_blob(&layers, data).map_err(|e| Status::unknown(e.to_string()))?;
-
-        if let Some(tx) = &pod.timeout_tx {
-            let _ = tx.send(false).await;
-        }
-
-        Ok(Response::new(()))
     }
 
     async fn start(
         &self,
         request: Request<StartRequest>,
     ) -> Result<Response<StartResponse>, Status> {
-        let ref_pod = self.pod.clone();
-        let mut pod = ref_pod.write().await;
-        let image = pod
-            .get_image(&request.get_ref().image_id)
-            .ok_or_else(|| Status::invalid_argument(utils::ERR_RPC_INVALID_IMAGE_ID))?;
-
-        let container = Container::start(image, &request.get_ref().envs)
+        let mut request_buf: Vec<u8> = bincode::serialize(request.get_ref())
+            .map_err(|_| Status::unknown(utils::ERR_UNEXPECTED))?;
+        let response_buf = self
+            .send_recv(4, &mut request_buf)
             .await
-            .map_err(|e| Status::unknown(e.to_string()))?;
+            .map_err(|_| Status::unknown(utils::ERR_UNEXPECTED))?;
 
-        let response = StartResponse {
-            container_id: container.id,
-        };
-
-        pod.add_container(container);
-
-        if let Some(tx) = &pod.timeout_tx {
-            let _ = tx.send(false).await;
+        match response_buf[0] {
+            0 => {
+                let response = bincode::deserialize(&response_buf[1..])
+                    .map_err(|_| Status::unknown(utils::ERR_UNEXPECTED))?;
+                Ok(Response::new(response))
+            }
+            1 => {
+                let status = get_status(&response_buf[1..])
+                    .map_err(|_| Status::unknown(utils::ERR_UNEXPECTED))?;
+                Err(status)
+            }
+            _ => Err(Status::unknown(utils::ERR_UNEXPECTED)),
         }
-
-        Ok(Response::new(response))
     }
 
     async fn restart(&self, request: Request<RestartRequest>) -> Result<Response<()>, Status> {
-        let container_id = request.get_ref().container_id;
-        let timeout = request.get_ref().timeout;
-
-        let exit_notifier = {
-            let ref_pod = self.pod.clone();
-            let pod = ref_pod.read().await;
-            let container = pod
-                .get_container(&container_id)
-                .ok_or_else(|| Status::invalid_argument(utils::ERR_RPC_INVALID_CONTAINER_ID))?;
-            let image = pod
-                .get_image(&container.image_id)
-                .ok_or_else(|| Status::invalid_argument(utils::ERR_RPC_INVALID_IMAGE_ID))?;
-
-            if image.manifest.no_restart {
-                return Err(Status::permission_denied(
-                    utils::ERR_RPC_CONTAINER_NOT_ALLOW_RESTART,
-                ));
-            }
-
-            if container.is_running() {
-                if timeout == 0 {
-                    return Err(Status::deadline_exceeded(
-                        utils::ERR_RPC_CONTAINER_RESTART_TIMEOUT,
-                    ));
-                }
-
-                let sig = if !image.manifest.signals.is_empty() {
-                    let s = image.manifest.signals[0];
-                    if s.abs() == libc::SIGTERM || s.abs() == libc::SIGKILL {
-                        s
-                    } else {
-                        return Err(Status::permission_denied(
-                            utils::ERR_RPC_CONTAINER_NOT_ALLOW_RESTART,
-                        ));
-                    }
-                } else {
-                    return Err(Status::permission_denied(
-                        utils::ERR_RPC_CONTAINER_NOT_ALLOW_RESTART,
-                    ));
-                };
-
-                unsafe {
-                    let mut pid: i32 = container.pid.into();
-                    if sig < 0 {
-                        pid = -pid.abs();
-                    }
-
-                    Errno::result(libc::kill(pid, sig.abs())).map_err(|errno| {
-                        Status::unknown(
-                            utils::ERR_RPC_SYSTEM_ERROR
-                                .replace("{}", format!("{}", errno).as_str()),
-                        )
-                    })?;
-                }
-
-                Some(container.exit_notifier.as_ref().unwrap().clone())
-            } else {
-                None
-            }
-        };
-
-        if let Some(notifier) = exit_notifier {
-            loop {
-                tokio::select! {
-                    _ = time::sleep(Duration::from_secs(timeout)) => {
-                        return Err(Status::deadline_exceeded(
-                            utils::ERR_RPC_CONTAINER_RESTART_TIMEOUT,
-                        ));
-                    }
-                    _ = notifier.notified() => break,
-                }
-            }
-        }
-
-        let image = {
-            let ref_pod = self.pod.clone();
-            let pod = ref_pod.read().await;
-            let container = pod
-                .get_container(&container_id)
-                .ok_or_else(|| Status::invalid_argument(utils::ERR_RPC_INVALID_CONTAINER_ID))?;
-            pod.get_image(&container.image_id)
-                .ok_or_else(|| Status::invalid_argument(utils::ERR_RPC_INVALID_IMAGE_ID))?
-                .clone()
-        };
-
-        let ref_pod = self.pod.clone();
-        let mut pod = ref_pod.write().await;
-        let container = pod
-            .get_container_mut(&container_id)
-            .ok_or_else(|| Status::invalid_argument(utils::ERR_RPC_INVALID_CONTAINER_ID))?;
-        container
-            .restart(&image)
+        let mut request_buf: Vec<u8> = bincode::serialize(request.get_ref())
+            .map_err(|_| Status::unknown(utils::ERR_UNEXPECTED))?;
+        let response_buf = self
+            .send_recv(5, &mut request_buf)
             .await
-            .map_err(|e| Status::unknown(e.to_string()))?;
+            .map_err(|_| Status::unknown(utils::ERR_UNEXPECTED))?;
 
-        if let Some(tx) = &pod.timeout_tx {
-            let _ = tx.send(false).await;
+        match response_buf[0] {
+            0 => Ok(Response::new(())),
+            1 => {
+                let status = get_status(&response_buf[1..])
+                    .map_err(|_| Status::unknown(utils::ERR_UNEXPECTED))?;
+                Err(status)
+            }
+            _ => Err(Status::unknown(utils::ERR_UNEXPECTED)),
         }
-
-        Ok(Response::new(()))
     }
 
     async fn exec(&self, request: Request<ExecRequest>) -> Result<Response<ExecResponse>, Status> {
-        let container_id = request.get_ref().container_id;
-        let command = request.get_ref().command.as_str();
-        let arguments = &request.get_ref().arguments;
-        let envs = &request.get_ref().envs;
-        let timeout = request.get_ref().timeout;
-        let stdin = request.get_ref().stdin.as_slice();
-        let mut capture_size = request.get_ref().capture_size as usize;
-
-        if capture_size == 0 {
-            capture_size = container::MAX_BUFF_LEN;
-        }
-
-        if stdin.len() > capture_size {
-            return Err(Status::invalid_argument(utils::ERR_RPC_BUFFER_EXCEED));
-        }
-
-        if !utils::start_with_uppercase(command) {
-            return Err(Status::invalid_argument(utils::ERR_RPC_PRIVATE_ENTRYPOINT));
-        }
-
-        let ref_pod = self.pod.clone();
-        let pod = ref_pod.read().await;
-        let container = pod
-            .get_container(&container_id)
-            .ok_or_else(|| Status::invalid_argument(utils::ERR_RPC_INVALID_CONTAINER_ID))?;
-
-        if !container.is_running() {
-            return Err(Status::unknown(utils::ERR_RPC_CONTAINER_TERMINATED));
-        }
-
-        let (stdout, stderr) = container
-            .enter(command, arguments, envs, timeout, stdin, capture_size)
+        let mut request_buf: Vec<u8> = bincode::serialize(request.get_ref())
+            .map_err(|_| Status::unknown(utils::ERR_UNEXPECTED))?;
+        let response_buf = self
+            .send_recv(6, &mut request_buf)
             .await
-            .map_err(|e| Status::unknown(e.to_string()))?;
+            .map_err(|_| Status::unknown(utils::ERR_UNEXPECTED))?;
 
-        if let Some(tx) = &pod.timeout_tx {
-            let _ = tx.send(false).await;
+        match response_buf[0] {
+            0 => {
+                let response = bincode::deserialize(&response_buf[1..])
+                    .map_err(|_| Status::unknown(utils::ERR_UNEXPECTED))?;
+                Ok(Response::new(response))
+            }
+            1 => {
+                let status = get_status(&response_buf[1..])
+                    .map_err(|_| Status::unknown(utils::ERR_UNEXPECTED))?;
+                Err(status)
+            }
+            _ => Err(Status::unknown(utils::ERR_UNEXPECTED)),
         }
-
-        Ok(Response::new(ExecResponse { stdout, stderr }))
     }
 
     async fn kill(&self, request: Request<KillRequest>) -> Result<Response<()>, Status> {
-        let container_id = request.get_ref().container_id;
-        let signal_num = request.get_ref().signal_num;
+        let mut request_buf: Vec<u8> = bincode::serialize(request.get_ref())
+            .map_err(|_| Status::unknown(utils::ERR_UNEXPECTED))?;
+        let response_buf = self
+            .send_recv(7, &mut request_buf)
+            .await
+            .map_err(|_| Status::unknown(utils::ERR_UNEXPECTED))?;
 
-        let ref_pod = self.pod.clone();
-        let pod = ref_pod.read().await;
-        let container = pod
-            .get_container(&container_id)
-            .ok_or_else(|| Status::invalid_argument(utils::ERR_RPC_INVALID_CONTAINER_ID))?;
-
-        if !container.is_running() {
-            return Err(Status::unknown(utils::ERR_RPC_CONTAINER_TERMINATED));
-        }
-
-        let image = pod
-            .get_image(&container.image_id)
-            .ok_or_else(|| Status::invalid_argument(utils::ERR_RPC_INVALID_IMAGE_ID))?;
-
-        if !image.manifest.signals.iter().any(|&s| s == signal_num) {
-            return Err(Status::permission_denied(
-                utils::ERR_RPC_CONTAINER_NOT_ALLOW_KILL,
-            ));
-        }
-
-        unsafe {
-            let mut pid: i32 = container.pid.into();
-            if signal_num < 0 {
-                pid = -pid.abs();
+        match response_buf[0] {
+            0 => Ok(Response::new(())),
+            1 => {
+                let status = get_status(&response_buf[1..])
+                    .map_err(|_| Status::unknown(utils::ERR_UNEXPECTED))?;
+                Err(status)
             }
-
-            Errno::result(libc::kill(pid, signal_num.abs())).map_err(|errno| {
-                Status::unknown(
-                    utils::ERR_RPC_SYSTEM_ERROR.replace("{}", format!("{}", errno).as_str()),
-                )
-            })?;
+            _ => Err(Status::unknown(utils::ERR_UNEXPECTED)),
         }
-
-        if let Some(tx) = &pod.timeout_tx {
-            let _ = tx.send(false).await;
-        }
-
-        Ok(Response::new(()))
     }
 
     async fn inspect(
         &self,
         request: Request<InspectRequest>,
     ) -> Result<Response<InspectResponse>, Status> {
-        let container_id = request.get_ref().container_id;
+        let mut request_buf: Vec<u8> = bincode::serialize(request.get_ref())
+            .map_err(|_| Status::unknown(utils::ERR_UNEXPECTED))?;
+        let response_buf = self
+            .send_recv(8, &mut request_buf)
+            .await
+            .map_err(|_| Status::unknown(utils::ERR_UNEXPECTED))?;
 
-        let mut infos: Vec<ContainerInfo> = vec![];
-
-        let ref_pod = self.pod.clone();
-        let mut pod = ref_pod.write().await;
-
-        if container_id == 0 {
-            for (_, c) in pod.containers.iter_mut() {
-                c.update_status()
-                    .map_err(|e| Status::unknown(e.to_string()))?;
-
-                infos.push(ContainerInfo {
-                    container_id: c.id,
-                    state: match c.status {
-                        CStatus::Running(s) => s,
-                        _ => 0,
-                    },
-                    wstatus: match c.status {
-                        CStatus::Exited(s) => s,
-                        _ => 0,
-                    },
-                    image_id: c.image_id.clone(),
-                    exe_path: c.exec_path.clone(),
-                });
+        match response_buf[0] {
+            0 => {
+                let response = bincode::deserialize(&response_buf[1..])
+                    .map_err(|_| Status::unknown(utils::ERR_UNEXPECTED))?;
+                Ok(Response::new(response))
             }
-        } else {
-            let container = pod
-                .get_container_mut(&container_id)
-                .ok_or_else(|| Status::invalid_argument(utils::ERR_RPC_INVALID_CONTAINER_ID))?;
-
-            container
-                .update_status()
-                .map_err(|e| Status::unknown(e.to_string()))?;
-
-            infos.push(ContainerInfo {
-                container_id: container.id,
-                state: match container.status {
-                    CStatus::Running(s) => s,
-                    _ => 0,
-                },
-                wstatus: match container.status {
-                    CStatus::Exited(s) => s,
-                    _ => 0,
-                },
-                image_id: container.image_id.clone(),
-                exe_path: container.exec_path.clone(),
-            });
+            1 => {
+                let status = get_status(&response_buf[1..])
+                    .map_err(|_| Status::unknown(utils::ERR_UNEXPECTED))?;
+                Err(status)
+            }
+            _ => Err(Status::unknown(utils::ERR_UNEXPECTED)),
         }
-
-        if let Some(tx) = &pod.timeout_tx {
-            let _ = tx.send(false).await;
-        }
-
-        Ok(Response::new(InspectResponse { info: infos }))
     }
 
     async fn report(
         &self,
         request: Request<ReportRequest>,
     ) -> Result<Response<ReportResponse>, Status> {
-        let ref_pod = self.pod.clone();
-        let pod = ref_pod.read().await;
-        if pod.images.is_empty() {
-            return Err(Status::unknown(utils::ERR_RPC_NO_IMAGES));
+        let mut request_buf: Vec<u8> = bincode::serialize(request.get_ref())
+            .map_err(|_| Status::unknown(utils::ERR_UNEXPECTED))?;
+        let response_buf = self
+            .send_recv(9, &mut request_buf)
+            .await
+            .map_err(|_| Status::unknown(utils::ERR_UNEXPECTED))?;
+
+        match response_buf[0] {
+            0 => {
+                let response = bincode::deserialize(&response_buf[1..])
+                    .map_err(|_| Status::unknown(utils::ERR_UNEXPECTED))?;
+                Ok(Response::new(response))
+            }
+            1 => {
+                let status = get_status(&response_buf[1..])
+                    .map_err(|_| Status::unknown(utils::ERR_UNEXPECTED))?;
+                Err(status)
+            }
+            _ => Err(Status::unknown(utils::ERR_UNEXPECTED)),
         }
-
-        let nonce_hi = request.get_ref().nonce_hi;
-        let nonce_lo = request.get_ref().nonce_lo;
-
-        let mut mrlog = HashMap::new();
-        mrlog.insert(0, MrLog { logs: vec![] });
-        mrlog.insert(1, MrLog { logs: vec![] });
-        mrlog.insert(2, MrLog { logs: vec![] });
-        mrlog.insert(
-            3,
-            MrLog {
-                logs: utils::get_measurement_rtmr3().map_err(|e| Status::unknown(e.to_string()))?,
-            },
-        );
-
-        let (requestor_nonce, acond_nonce) =
-            utils::get_nounces(nonce_hi, nonce_lo).map_err(|e| Status::unknown(e.to_string()))?;
-
-        let attestation_data = pod
-            .get_attestation_data(requestor_nonce, acond_nonce, None)
-            .map_err(|e| Status::unknown(e.to_string()))?;
-
-        let data = match request.get_ref().request_type {
-            0 => report::get_report(&attestation_data).map_err(|e| Status::unknown(e.to_string())),
-            1 => report::get_quote(&attestation_data).map_err(|e| Status::unknown(e.to_string())),
-            _ => Err(Status::invalid_argument(
-                utils::ERR_RPC_INVALID_REQUEST_TYPE,
-            )),
-        }?;
-
-        if let Some(tx) = &pod.timeout_tx {
-            let _ = tx.send(false).await;
-        }
-
-        Ok(Response::new(ReportResponse {
-            data,
-            mrlog,
-            attestation_data,
-        }))
     }
 
     async fn get_manifest(
         &self,
         request: Request<GetManifestRequest>,
     ) -> Result<Response<GetManifestResponse>, Status> {
-        let image_id = &request.get_ref().image_id;
+        let mut request_buf: Vec<u8> = bincode::serialize(request.get_ref())
+            .map_err(|_| Status::unknown(utils::ERR_UNEXPECTED))?;
+        let response_buf = self
+            .send_recv(10, &mut request_buf)
+            .await
+            .map_err(|_| Status::unknown(utils::ERR_UNEXPECTED))?;
 
-        let ref_pod = self.pod.clone();
-        let pod = ref_pod.read().await;
-        let image = pod
-            .get_image(image_id)
-            .ok_or_else(|| Status::invalid_argument(utils::ERR_RPC_INVALID_IMAGE_ID))?;
-
-        let manifest = utils::get_manifest(image_id).map_err(|e| Status::unknown(e.to_string()))?;
-        let certificate = image.signer_bytes.clone();
-
-        if let Some(tx) = &pod.timeout_tx {
-            let _ = tx.send(false).await;
+        match response_buf[0] {
+            0 => {
+                let response = bincode::deserialize(&response_buf[1..])
+                    .map_err(|_| Status::unknown(utils::ERR_UNEXPECTED))?;
+                Ok(Response::new(response))
+            }
+            1 => {
+                let status = get_status(&response_buf[1..])
+                    .map_err(|_| Status::unknown(utils::ERR_UNEXPECTED))?;
+                Err(status)
+            }
+            _ => Err(Status::unknown(utils::ERR_UNEXPECTED)),
         }
-
-        Ok(Response::new(GetManifestResponse {
-            manifest,
-            certificate,
-        }))
     }
 }
 
+fn get_status(buf: &[u8]) -> Result<Status> {
+    let error: AcondError = bincode::deserialize(buf)?;
+    let code = match error.code {
+        Code::Unknown => tonic::Code::Unknown,
+        Code::InvalidArgument => tonic::Code::InvalidArgument,
+        Code::DeadlineExceeded => tonic::Code::DeadlineExceeded,
+        Code::PermissionDenied => tonic::Code::PermissionDenied,
+    };
+    Ok(Status::new(code, error.message))
+}
+
 pub async fn run_vsock_server(
-    pod: Arc<RwLock<Pod>>,
+    stream: StdUnixStream,
     port: u32,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let listener = VsockListener::bind(libc::VMADDR_CID_ANY, port)?;
     let incoming = vsock_incoming::VsockIncoming::new(listener);
 
     Server::builder()
-        .add_service(AconServiceServer::new(TDAconService { pod }))
+        .add_service(AconServiceServer::new(TDAconService::new(
+            UnixStream::from_std(stream)?,
+        )))
         .serve_with_incoming(incoming)
         .await?;
 
@@ -529,13 +355,15 @@ pub async fn run_vsock_server(
 }
 
 pub async fn run_tcp_server(
-    pod: Arc<RwLock<Pod>>,
+    stream: StdUnixStream,
     port: u32,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let server_addr = format!("0.0.0.0:{}", port).parse()?;
 
     Server::builder()
-        .add_service(AconServiceServer::new(TDAconService { pod }))
+        .add_service(AconServiceServer::new(TDAconService::new(
+            UnixStream::from_std(stream)?,
+        )))
         .serve(server_addr)
         .await?;
 
@@ -543,21 +371,20 @@ pub async fn run_tcp_server(
 }
 
 // unix socket for testing
-pub async fn run_unix_server(
-    pod: Arc<RwLock<Pod>>,
-    path: &str,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let unix_path = std::path::Path::new(path);
+pub async fn run_unix_server(stream: StdUnixStream) -> Result<(), Box<dyn std::error::Error>> {
+    let unix_path = std::path::Path::new(DEBUG_SOCK_PATH);
     if unix_path.exists() {
         std::fs::remove_file(unix_path)?;
     }
     std::fs::create_dir_all(unix_path.parent().unwrap())?;
 
-    let listener = tokio::net::UnixListener::bind(path)?;
+    let listener = tokio::net::UnixListener::bind(unix_path)?;
     let incoming = crate::unix_incoming::UnixIncoming::new(listener);
 
     Server::builder()
-        .add_service(AconServiceServer::new(TDAconService { pod }))
+        .add_service(AconServiceServer::new(TDAconService::new(
+            UnixStream::from_std(stream)?,
+        )))
         .serve_with_incoming(incoming)
         .await?;
 
