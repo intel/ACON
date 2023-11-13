@@ -118,13 +118,13 @@ run_workload() {
 
     log_note "Build bundle"
     if test -n "$docker_file"; then
-        docker build -f "$docker_file" -t acon_"$docker_id" .
+        docker build -f "$docker_file" -t "$docker_id" .
     else
         docker pull "$docker_id"
     fi
 
     log_note "Generate Manifest"
-    ./aconcli generate -o "$docker_id.json" acon_"$docker_id" || {
+    ./aconcli generate -o "$docker_id.json" "$docker_id" || {
         log_error "Generate Manifest error"
         return 2
     }
