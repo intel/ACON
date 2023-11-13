@@ -55,7 +55,7 @@ pub const ERR_RPC_SYSTEM_ERROR: &str = "System error, errno: {}";
 pub const ERR_IPC_INVALID_REQUEST: &str = "Invalid structure format";
 pub const ERR_IPC_NOT_SUPPORTED: &str = "Request not supported";
 pub const ERR_ATTEST_NOT_SUPPORTED: &str = "Attestation not supported";
-pub const ERR_ATTEST_UNEXPECTED: &str = "Attestation unexpected error";
+pub const ERR_UNEXPECTED: &str = "Unexpected error";
 
 const STORAGE_ROOT: &str = "/run/acond";
 const MEASURE_ROOT: &str = "/run/rtmr";
@@ -76,7 +76,8 @@ pub const SHA384: &str = "sha384";
 pub const SHA512: &str = "sha512";
 pub const BUFF_SIZE: usize = 0x400;
 
-static CONTAINER_SERIES: AtomicUsize = AtomicUsize::new(1);
+// Reserve 1 for the deprivileged process
+static CONTAINER_SERIES: AtomicUsize = AtomicUsize::new(2);
 
 lazy_static! {
     static ref TOP_SUB_DIR: HashSet<&'static str> = {
