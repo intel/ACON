@@ -155,10 +155,12 @@ run_workload() {
 
     log_note "Get TDVM status"
     ./aconcli status
+    output=$(./aconcli status)
+    instance_id=$(echo "$output" | awk '/Instance ID:/ {print $4}')
 
     if test -n "$invoke"; then
         log_note "Invoke TDVM"
-        ./aconcli invoke -c tcp://:5532 -e 1 Whoami
+        ./aconcli invoke -c tcp://:5532 -e "$instance_id" Whoami
     fi
 
     log_note "Stop ACON instances"

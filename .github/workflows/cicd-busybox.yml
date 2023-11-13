@@ -23,4 +23,4 @@ jobs:
     - name: Enable busybox docker
       run: |
         source scripts/start-happypath.sh
-        run_workload -d test -i busybox -f bundle.dockerfile -o invoke
+        run_workload -d test -i acon_busybox -f bundle.dockerfile -o invoke
