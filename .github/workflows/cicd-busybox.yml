@@ -1,0 +1,26 @@
+name: CICD-BusyBox
+
+on:
+  push:
+    branches: [ "main" ]
+    paths-ignore:
+      - 'doc/**'
+  pull_request:
+    branches: [ "main" ]
+    paths-ignore:
+      - 'doc/**'
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  CICD:
+
+    runs-on: self-hosted
+    name: CICD-BusyBox
+    steps:
+    - uses: actions/checkout@v3
+    - name: Enable busybox docker
+      run: |
+        source scripts/start-happypath.sh
+        run_workload -d test -i busybox -f bundle.dockerfile -o invoke
