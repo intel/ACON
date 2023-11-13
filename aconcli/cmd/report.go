@@ -9,12 +9,16 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"math/rand"
 	"os"
 	"strconv"
+	"time"
 
 	"aconcli/service"
 	"github.com/spf13/cobra"
 )
+
+var isQuote bool
 
 const NUM_RTMRS = 4
 
@@ -116,7 +120,7 @@ func parseReport(report []byte) error {
 }
 
 var reportCmd = &cobra.Command{
-	Use:     "report <nonce-low>  <nonce-high>",
+	Use:     "report [nonce-low]  [nonce-high]",
 	Short:   "Request TD report or Quote",
 	GroupID: "runtime",
 	Long: `
@@ -125,6 +129,7 @@ Request a TD report or Quote from an ACON TD/VM.
 The ACON TD/VM must be specified by the '-c' flag. Use 'aconcli status' to list
 ACON TDs/VMs and ACON containers running in them.
 `,
+	Args: cobra.MaximumNArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return getReport(args)
 	},
@@ -138,32 +143,63 @@ func getReport(args []string) error {
 	}
 	defer c.Close()
 
-	nl, err := strconv.ParseUint(args[0], 0, 64)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Report: cannot convert %s: %v\n", args[0], err)
-		return err
+	var nl uint64
+	var nh uint64
+	s := rand.NewSource(time.Now().UnixNano())
+	r := rand.New(s)
+
+	if len(args) == 0 {
+		nl = r.Uint64()
+		nh = r.Uint64()
+	}
+	if len(args) == 1 {
+		nl, err = strconv.ParseUint(args[0], 0, 64)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Report: cannot convert nonce low %s: %v\n", args[0], err)
+			return err
+		}
+		nh = r.Uint64()
+	}
+	if len(args) == 2 {
+		nl, err = strconv.ParseUint(args[0], 0, 64)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Report: cannot convert nonce low %s: %v\n", args[0], err)
+			return err
+		}
+		nh, err = strconv.ParseUint(args[1], 0, 64)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Report: cannot convert nonce high %s: %v\n", args[1], err)
+			return err
+		}
 	}
 
-	nh, err := strconv.ParseUint(args[1], 0, 64)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Report: cannot convert %s: %v\n", args[1], err)
-		return err
+	var requestType uint32
+	if isQuote {
+		requestType = 1
+	} else {
+		requestType = 0
 	}
-
-	report, mrlog0, mrlog1, mrlog2, mrlog3, attest_data, err := service.Report(c, nl, nh)
+	data, _, _, _, mrlog3, attest_data, err := service.Report(c, nl, nh, requestType)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Report: cannot call 'report' service: %v\n", err)
 		return err
 	}
-
-	fmt.Fprintf(os.Stdout, "mrlog0:\n%v\n", mrlog0)
-	fmt.Fprintf(os.Stdout, "mrlog1:\n%v\n", mrlog1)
-	fmt.Fprintf(os.Stdout, "mrlog2:\n%v\n", mrlog2)
 	fmt.Fprintf(os.Stdout, "mrlog3:\n%v\n", mrlog3)
 	fmt.Fprintf(os.Stdout, "attestation data:\n%v\n", attest_data)
 
-	fmt.Fprintf(os.Stdout, "raw report:\n%v\n", report)
-	return parseReport(report)
+	filepath := "report.bin"
+	if isQuote {
+		filepath = "quote.bin"
+	}
+	if err := os.WriteFile(filepath, data, 0600); err != nil {
+		return err
+	}
+
+	if isQuote {
+		return nil
+	} else {
+		return parseReport(data)
+	}
 }
 
 func init() {
