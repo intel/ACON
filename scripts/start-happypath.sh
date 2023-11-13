@@ -39,17 +39,18 @@ log_error() {
 }
 
 get_options() {
-    while getopts "d:i:f:j:h" opt; do
+    while getopts "d:i:f:j:o:h" opt; do
         case $opt in
             d) bundle_dir="$OPTARG";;
             i) docker_id="$OPTARG";;
             f) docker_file="$OPTARG";;
             j) jq_string="$OPTARG";;
+            o) invoke="$OPTARG";;
             h) opt_h=1
                echo "Usage: run_workload -d bundle_dir -i container -f docker_file [-h]"
                ;;
             \?) echo "Invalid option: -$OPTARG" >&2
-                exit 1
+                return 1
                 ;;
         esac
     done
@@ -62,9 +63,9 @@ run_workload() {
         return 0
     fi
 
-    test -v "$jq_string" || {
+    if test -z "$jq_string"; then
         jq_string=".writableFS=true"
-    }
+    fi
 
     test -d "$bundle_dir" && {
         log_warn "$bundle_dir directory already exist and will be cleared" 
@@ -129,6 +130,7 @@ run_workload() {
     }
 
     log_note "Modify manifest file"
+    jq "$jq_string" "$docker_id.json"
     cat <<< $(jq "$jq_string" "$docker_id.json") > "$docker_id.json" || {
         log_error "Append WritableFs:true to manifest failed"
         return 2
@@ -154,8 +156,10 @@ run_workload() {
     log_note "Get TDVM status"
     ./aconcli status
 
-    log_note "Invoke TDVM"
-    ./aconcli invoke -c tcp://:5532 -e 1 Whoami
+    if test -n "$invoke"; then
+        log_note "Invoke TDVM"
+        ./aconcli invoke -c tcp://:5532 -e 1 Whoami
+    fi
 
     log_note "Stop ACON instances"
     ./aconcli shutdown -f tcp://:5532
