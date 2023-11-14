@@ -17,8 +17,10 @@ import (
 	"aconcli/repo"
 )
 
+var imageId string
+
 var generateCmd = &cobra.Command{
-	Use:     "generate <docker-image>",
+	Use:     "generate <manifest-file>",
 	Short:   "Generate a manifest file and commit file system layers to ACON repository",
 	GroupID: "image",
 	Long: `
@@ -26,14 +28,17 @@ Generate a manifest file in JSON format and commit to ACON repository
 the file system layers from specified Docker image. The output manifest
 file can be further edited manually and can be signed or re-signed using
 the 'aconcli sign' sub-command`,
-	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return generateManifest(args)
 	},
 }
 
 func generateManifest(args []string) error {
-	dockerImageId = args[0]
+	if len(args) > 0 {
+		manifestFile = args[0]
+	} else {
+		manifestFile = "acon.json"
+	}
 	startingDir := filepath.Dir(manifestFile)
 	if targetDir != "" {
 		startingDir = targetDir
@@ -53,7 +58,7 @@ func generateManifest(args []string) error {
 	}
 
 	// get and process the image layers
-	imageStream, err := cli.ImageSave(ctx, []string{dockerImageId})
+	imageStream, err := cli.ImageSave(ctx, []string{imageId})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Generate Manifest: cannot get image content: %v\n", err)
 		return err
@@ -61,7 +66,7 @@ func generateManifest(args []string) error {
 	defer imageStream.Close()
 
 	// get and transform the layer info
-	inspect, _, err := cli.ImageInspectWithRaw(ctx, dockerImageId)
+	inspect, _, err := cli.ImageInspectWithRaw(ctx, imageId)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Generate Manifest: cannot inspect image: %v\n", err)
 		return err
@@ -143,7 +148,7 @@ func generateManifest(args []string) error {
 
 func init() {
 	rootCmd.AddCommand(generateCmd)
-	generateCmd.Flags().StringVarP(&manifestFile, "output", "o", "",
-		"output file name for the manifest file")
-	generateCmd.MarkFlagRequired("output")
+	generateCmd.Flags().StringVarP(&imageId, "image", "i", "",
+		"image to be used for the ACON container")
+	generateCmd.MarkFlagRequired("image")
 }

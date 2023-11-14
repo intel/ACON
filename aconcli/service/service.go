@@ -147,12 +147,12 @@ func Inspect(sc pb.AconServiceClient, cid uint32) ([]AconStatus, error) {
 	return result, nil
 }
 
-func Report(sc pb.AconServiceClient, nonceLo, nonceHi uint64) (data []byte,
+func Report(sc pb.AconServiceClient, nonceLo, nonceHi uint64, requestType uint32) (data []byte,
 	mrlog0 []string, mrlog1 []string, mrlog2 []string, mrlog3 []string, attest_data string, e error) {
 	ctx, cancel := context.WithTimeout(context.Background(), defaultServiceTimeout)
 	defer cancel()
 
-	r, err := sc.Report(ctx, &pb.ReportRequest{NonceLo: nonceLo, NonceHi: nonceHi})
+	r, err := sc.Report(ctx, &pb.ReportRequest{NonceLo: nonceLo, NonceHi: nonceHi, RequestType: requestType})
 	if err != nil {
 		e = err
 		return

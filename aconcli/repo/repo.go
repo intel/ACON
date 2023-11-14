@@ -726,7 +726,7 @@ func createSymlink(oldname, newname string) error {
 
 	// remove obsolete symlink
 	if finfo, err := os.Lstat(newname); err == nil {
-		if finfo.Mode() == fs.ModeSymlink {
+		if finfo.Mode()&fs.ModeSymlink == fs.ModeSymlink {
 			os.Remove(newname)
 		}
 	}
