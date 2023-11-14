@@ -124,7 +124,7 @@ run_workload() {
     fi
 
     log_note "Generate Manifest"
-    ./aconcli generate -o "$docker_id.json" "$docker_id" || {
+    ./aconcli generate -i "$docker_id" "$docker_id.json"  || {
         log_error "Generate Manifest error"
         return 2
     }
