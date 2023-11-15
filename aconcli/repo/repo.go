@@ -227,31 +227,44 @@ func (r *Repo) Prune() error {
 	if err != nil {
 		return fmt.Errorf("prune: cannot get blobs in use: %v", err)
 	}
+
 	blobDir := filepath.Join(r.blobDirPath(), config.PrimaryHashAlgo)
 	files, err := os.ReadDir(blobDir)
-	if err != nil {
+	if err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("prune: cannot read blob directory %s: %v", blobDir, err)
 	}
-	for _, file := range files {
-		f := file.Name()
-		if _, used := blobs[f]; !used {
-			os.Remove(filepath.Join(blobDir, f))
+
+	// Clean up unused blobs
+	primaryBlobNameLen := len(config.PrimaryHashAlgo) + 1 + config.PrimaryHashAlgoLen
+	for _, f := range files {
+		if f.Type().IsRegular() && len(f.Name()) >= config.PrimaryHashAlgoLen {
+			b := config.PrimaryHashAlgo + "/" + f.Name()
+			if _, in := blobs[b[:primaryBlobNameLen]]; !in {
+				bPath := filepath.Join(r.blobDirPath(), filepath.FromSlash(b))
+				if err := os.Remove(bPath); err != nil {
+					fmt.Fprintln(os.Stderr, "error removing", bPath)
+				} else {
+					fmt.Println("removed", b[:primaryBlobNameLen])
+				}
+			}
 		}
 	}
 
-	blobSymlinkDir := filepath.Join(r.blobDirPath(), config.DockerHashAlgo)
-	links, err := os.ReadDir(blobSymlinkDir)
-	if err != nil {
-		return fmt.Errorf("prune: cannot read blob symlink directory %s: %v", blobSymlinkDir, err)
-	}
-
-	for _, link := range links {
-		linkPath := filepath.Join(blobSymlinkDir, link.Name())
-		if _, err := filepath.EvalSymlinks(linkPath); err != nil {
-			// link is broken
-			os.Remove(linkPath)
+	// Clean up dangling symlinks
+	for _, d := range []string{config.DockerHashAlgo} {
+		symlinkDir := filepath.Join(r.blobDirPath(), d)
+		if files, err := os.ReadDir(symlinkDir); err == nil {
+			for _, f := range files {
+				fPath := filepath.Join(symlinkDir, f.Name())
+				if _, err := os.Stat(fPath); os.IsNotExist(err) {
+					if err := os.Remove(fPath); err != nil {
+						fmt.Fprintln(os.Stderr, "error removing dangling symlink", fPath)
+					}
+				}
+			}
 		}
 	}
+
 	return nil
 }
 
@@ -487,7 +500,7 @@ func (r *Repo) findAllManifestEntry() ([]string, error) {
 	var manifests []string
 	mDir := r.manifestDirPath()
 	hashDirs, err := os.ReadDir(mDir)
-	if err != nil {
+	if err != nil && !os.IsNotExist(err) {
 		return nil, fmt.Errorf("find all manifest dirs, read manifest directory: %v", err)
 	}
 
@@ -642,12 +655,13 @@ func (r *Repo) checkBundles() bool {
 
 func (r *Repo) blobInUse() (map[string]int, error) {
 	bundles, err := r.AllBundles()
-	if err != nil {
+	if err != nil && !os.IsNotExist(err) {
 		return nil, err
 	}
 
-	inUse := make(map[string]int)
+	inUse := map[string]int{}
 
+	primaryBlobNameLen := len(config.PrimaryHashAlgo) + 1 + config.PrimaryHashAlgoLen
 	for _, b := range bundles {
 		layers, err := b.Layers()
 		if err != nil {
@@ -655,9 +669,15 @@ func (r *Repo) blobInUse() (map[string]int, error) {
 			continue
 		}
 		for _, layer := range layers {
-			if strings.HasPrefix(layer, "sha") {
-				blobFileName := filepath.Base(layer) + config.BlobExtension
-				inUse[blobFileName]++
+			inUse[layer]++
+			layerPath := filepath.Join(r.blobDirPath(), filepath.FromSlash(layer)+".tar")
+			if t, err := os.Readlink(layerPath); err == nil {
+				if !strings.HasPrefix(t, filepath.Join("..", config.PrimaryHashAlgo)+string(filepath.Separator)) ||
+					len(t) < 3+primaryBlobNameLen {
+					fmt.Fprintln(os.Stderr, "malformed symlink", layerPath)
+				} else {
+					inUse[filepath.ToSlash(t[3:3+primaryBlobNameLen])]++
+				}
 			}
 		}
 	}
