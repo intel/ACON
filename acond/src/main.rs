@@ -1,38 +1,23 @@
 // Copyright (C) 2023 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
-
 #[macro_use]
 extern crate lazy_static;
 #[macro_use]
 extern crate scopeguard;
 
 use crate::config::Config;
-use crate::mount::RootMount;
-use crate::pod::Pod;
 use anyhow::{anyhow, Result};
-use futures::future;
 use nix::{
-    errno::Errno,
-    mount::{self as nix_mount, MsFlags},
-    sys::{
-        reboot::{self, RebootMode},
-        wait,
-    },
-    unistd::{self, Pid},
+    sys::reboot::{self, RebootMode},
+    unistd::{self, ForkResult, Gid, Pid, Uid},
 };
-
-use std::{env, fs, io::ErrorKind, mem, os::unix::fs as unixfs, path::Path, sync::Arc};
-use tokio::{
-    runtime::Builder,
-    signal::unix as tokio_unix,
-    sync::{mpsc, watch, RwLock},
-    task::JoinHandle,
-    time::{self, Duration},
-};
+use std::{env, os::unix::net::UnixStream};
+use tokio::runtime::Builder;
 
 mod config;
 mod container;
 mod image;
+mod io;
 mod ipc;
 mod mount;
 mod pod;
@@ -40,236 +25,61 @@ mod pod;
 mod pty;
 mod report;
 mod rpc;
+mod server;
 mod unix_incoming;
 mod utils;
 mod vsock_incoming;
 
-lazy_static! {
-    pub static ref SOFT_LINKS: Vec<(&'static str, &'static str)> = vec![
-        ("/proc/self/fd", "/dev/fd"),
-        ("/proc/self/fd/0", "/dev/stdin"),
-        ("/proc/self/fd/1", "/dev/stdout"),
-        ("/proc/self/fd/2", "/dev/stderr")
-    ];
-    pub static ref ROOTFS_MOUNTS: Vec<RootMount> = vec![
-        RootMount {
-            source: None,
-            target: "/dev",
-            fstype: Some("devtmpfs"),
-            flags: MsFlags::empty(),
-            option: None
-        },
-        RootMount {
-            source: None,
-            target: "/dev/pts",
-            fstype: Some("devpts"),
-            flags: MsFlags::empty(),
-            option: None
-        },
-        RootMount {
-            source: None,
-            target: "/proc",
-            fstype: Some("proc"),
-            flags: MsFlags::empty(),
-            option: None
-        },
-        RootMount {
-            source: None,
-            target: "/sys",
-            fstype: Some("sysfs"),
-            flags: MsFlags::empty(),
-            option: None
-        },
-        RootMount {
-            source: None,
-            target: "/shared",
-            fstype: Some("tmpfs"),
-            flags: MsFlags::empty(),
-            option: Some("size=1m")
-        },
-        RootMount {
-            source: None,
-            target: "/run",
-            fstype: Some("tmpfs"),
-            flags: MsFlags::empty(),
-            option: Some("size=50%,mode=0755")
-        },
-    ];
-}
-
-const ACOND_DEBUG_SOCK_PATH: &str = "/tmp/acon.sock";
-const ACOND_SOCK_PATH: &str = "/shared/acon.sock";
-
-async fn handle_signal(pod: Arc<RwLock<Pod>>) -> Result<()> {
-    let siginfo = unsafe {
-        let mut siginfo: libc::siginfo_t = mem::zeroed();
-        Errno::result(libc::waitid(
-            libc::P_ALL,
-            0,
-            &mut siginfo,
-            libc::WNOWAIT | libc::WNOHANG | libc::WEXITED,
-        ))?;
-        siginfo
-    };
-
-    let child_pid = unsafe { siginfo.si_pid() };
-    if child_pid == 0 {
-        return Ok(());
-    }
-
-    if utils::is_init_process(child_pid)? {
-        let cid = unsafe { siginfo.si_uid() };
-        let ref_pod = pod.clone();
-        let mut pod = ref_pod.write().await;
-
-        if let Some(c) = pod.get_container_mut(&cid) {
-            c.status = container::CStatus::Exited(unsafe { siginfo.si_status() });
-            utils::umount_container_rootfs(c.id)?;
-            if let Some(exit_notifier) = c.exit_notifier.as_ref() {
-                exit_notifier.notify_waiters();
-            } else {
-                utils::destroy_container_dtree(cid)?;
-            }
-        }
-    }
-
-    wait::waitpid(Pid::from_raw(child_pid), None)?;
-
-    let ref_pod = pod.clone();
-    let pod = ref_pod.read().await;
-    if !pod.has_alive_container() {
-        if let Some(tx) = &pod.timeout_tx {
-            let _ = tx.send(true).await;
-        }
-    }
-
-    Ok(())
-}
-
-async fn setup_signal_handler(
-    pod: Arc<RwLock<Pod>>,
-    mut shutdown: watch::Receiver<bool>,
-) -> Result<()> {
-    prctl::set_child_subreaper(true).map_err(|e| anyhow!(e.to_string()))?;
-
-    let mut sigchild = tokio_unix::signal(tokio_unix::SignalKind::child())?;
-    loop {
-        tokio::select! {
-            _ = shutdown.changed() => {
-                break;
-            }
-
-            _ = sigchild.recv() => {
-                handle_signal(pod.clone()).await?;
-            }
-        }
-    }
-
-    Ok(())
-}
-
-async fn start_timer(mut rx: mpsc::Receiver<bool>, timeout: u64) {
-    let mut stop = true;
-    loop {
-        while !stop {
-            stop = rx.recv().await.unwrap();
-        }
-
-        match time::timeout(Duration::from_secs(timeout), rx.recv()).await {
-            Ok(v) => stop = v.unwrap(),
-            Err(_) => {
-                if stop {
-                    break;
-                }
-            }
-        }
-    }
-}
-
-async fn start_rpc(debug: bool) -> Result<(), Box<dyn std::error::Error>> {
-    // log support?
-
+fn start_service(debug: bool) -> Result<(), Box<dyn std::error::Error>> {
     let mut config = Config::new();
     config.parse_cmdline(None)?;
 
-    let (timeout_tx, timeout_rx) = mpsc::channel(1);
-    let pod = Arc::new(RwLock::new(Pod::new(Some(timeout_tx))));
+    let (pstream, cstream) = UnixStream::pair()?;
 
-    let mut tasks: Vec<JoinHandle<Result<()>>> = Vec::new();
-    let (shutdown_sender, shudown_receiver) = watch::channel(true);
+    match unsafe { unistd::fork() } {
+        Ok(ForkResult::Parent { child: _ }) => {
+            pstream.set_nonblocking(true)?;
+            let rt = Builder::new_current_thread().enable_all().build()?;
+            rt.block_on(server::start_server(pstream, &config))?;
+            rt.shutdown_background();
 
-    tasks.push(tokio::spawn(setup_signal_handler(
-        pod.clone(),
-        shudown_receiver.clone(),
-    )));
-    tasks.push(tokio::spawn(ipc::run_unix_server(
-        pod.clone(),
-        ACOND_SOCK_PATH,
-        shudown_receiver.clone(),
-    )));
+            Ok(())
+        }
+        Ok(ForkResult::Child) => {
+            cstream.set_nonblocking(true)?;
+            let gid = Gid::from_raw(1);
+            let uid = Uid::from_raw(1);
+            unistd::setresgid(gid, gid, gid)?;
+            unistd::setresuid(uid, uid, uid)?;
+            prctl::set_name("rpc_server").map_err(|e| anyhow!(e.to_string()))?;
 
-    #[cfg(feature = "interactive")]
-    {
-        let (tx, rx) = mpsc::channel(1);
-        tasks.push(tokio::spawn(pty::run_terminal_server(rx)));
-        tasks.push(tokio::task::spawn_blocking(move || {
-            pty::run_acond_terminal(tx)
-        }));
-    }
-
-    tokio::select! {
-        _ = start_timer(timeout_rx, config.timeout as u64) => (),
-
-        res = async {
+            let rt = Builder::new_current_thread().enable_all().build()?;
             if debug {
-                rpc::run_unix_server(pod.clone(), ACOND_DEBUG_SOCK_PATH).await
+                rt.block_on(rpc::run_unix_server(cstream))?;
             } else if config.vsock_conn {
-                rpc::run_vsock_server(pod.clone(), config.vsock_port).await
+                rt.block_on(rpc::run_vsock_server(cstream, config.vsock_port))?;
             } else {
-                rpc::run_tcp_server(pod.clone(), config.tcp_port).await
+                rt.block_on(rpc::run_tcp_server(cstream, config.tcp_port))?;
             }
-        } => {
-            return res;
+
+            Ok(())
+        }
+        Err(errno) => {
+            eprintln!("Start service error, errno = {errno}.");
+            Err("Start service error, errno = {errno}.".into())
         }
     }
-
-    shutdown_sender.send(true)?;
-
-    future::join_all(tasks).await;
-
-    Ok(())
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    mount::mount_rootfs()?;
+
     let args = env::args().collect::<Vec<_>>();
-
     let debug = args.len() == 2 && args[1] == "unix";
-
-    if !utils::is_rootfs_mounted() {
-        for m in ROOTFS_MOUNTS.iter() {
-            let target = Path::new(m.target);
-            if !target.exists() {
-                fs::create_dir(target)?;
-            }
-
-            nix_mount::mount(m.source, m.target, m.fstype, m.flags, m.option)?;
-        }
-    }
-
-    for (original, link) in SOFT_LINKS.iter() {
-        unixfs::symlink(original, link).or_else(|e| match e {
-            ref e if e.kind() == ErrorKind::AlreadyExists => Ok(()),
-            _ => Err(e),
-        })?;
-    }
-
-    let rt = Builder::new_current_thread().enable_all().build()?;
-    rt.block_on(start_rpc(debug))?;
-    rt.shutdown_background();
+    start_service(debug)?;
 
     if unistd::getpid() == Pid::from_raw(1) {
         reboot::reboot(RebootMode::RB_POWER_OFF)?;
     }
-
     Ok(())
 }

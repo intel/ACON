@@ -1,10 +1,9 @@
 // Copyright (C) 2023 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::utils::BUFF_SIZE;
+use crate::io as acond_io;
 use anyhow::{anyhow, Result};
 use nix::{
-    errno::Errno,
     libc, pty,
     sys::{
         select::{self, FdSet},
@@ -24,7 +23,7 @@ use std::{
 };
 use tokio::{
     fs::File,
-    io::{self, AsyncReadExt},
+    io,
     sync::{mpsc, oneshot, Mutex},
 };
 
@@ -209,28 +208,15 @@ pub async fn monitor_terminal(fd: RawFd) -> Result<()> {
 
     let mut reader = unsafe { File::from_raw_fd(fd) };
     loop {
-        let mut buf: Vec<u8> = vec![0; BUFF_SIZE];
-        let mut len = 0;
+        let buf = match acond_io::read_async(&mut reader).await {
+            Ok(b) => b,
+            Err(e) => {
+                let mut terminal_list = ref_terminal_list.lock().await;
+                terminal_list.remove_terminal(fd)?;
 
-        loop {
-            match reader.read(&mut buf[len..]).await {
-                Ok(l) => {
-                    len += l;
-                    if len == buf.len() {
-                        buf.resize(buf.len() + BUFF_SIZE, 0);
-                    } else {
-                        break;
-                    }
-                }
-                Err(e) => {
-                    let mut terminal_list = ref_terminal_list.lock().await;
-                    terminal_list.remove_terminal(fd)?;
-
-                    return Err(e.into());
-                }
+                return Err(e.into());
             }
-        }
-        buf.truncate(len);
+        };
 
         let mut terminal_list = ref_terminal_list.lock().await;
         let terminal = terminal_list.terminals.get_mut(&fd).unwrap();
@@ -339,7 +325,7 @@ fn enter_pod_terminal(fd: RawFd) -> Result<()> {
         select::select(None, Some(&mut rfdset), None, None, None)?;
 
         if rfdset.contains(fd) {
-            if let Ok(buf) = read_buffer(fd) {
+            if let Ok(buf) = acond_io::read(fd) {
                 unistd::write(libc::STDOUT_FILENO, &buf)?;
             } else {
                 unistd::close(fd)?;
@@ -350,7 +336,7 @@ fn enter_pod_terminal(fd: RawFd) -> Result<()> {
         }
 
         if rfdset.contains(libc::STDIN_FILENO) {
-            let buf = read_buffer(libc::STDIN_FILENO)?;
+            let buf = acond_io::read(libc::STDIN_FILENO)?;
             if let Err(e) = unistd::write(fd, &buf) {
                 unistd::close(fd)?;
                 setting.leave_terminal()?;
@@ -413,7 +399,7 @@ fn enter_container_terminal(fd: RawFd, tx: mpsc::Sender<Command>) -> Result<()> 
         select::select(None, Some(&mut rfdset), None, Some(&mut eefdset), None)?;
 
         if rfdset.contains(libc::STDIN_FILENO) {
-            let mut buf = read_buffer(libc::STDIN_FILENO)?;
+            let mut buf = acond_io::read(libc::STDIN_FILENO)?;
 
             if hotkey_pressed {
                 if buf[0] == 0x58 || buf[0] == 0x78 {
@@ -469,28 +455,4 @@ fn is_hotkey_pressed(buf: &mut Vec<u8>) -> bool {
     }
 
     false
-}
-
-fn read_buffer(fd: RawFd) -> Result<Vec<u8>> {
-    let mut buf: Vec<u8> = vec![0; BUFF_SIZE];
-    let mut len = 0;
-
-    loop {
-        match unistd::read(fd, &mut buf[len..]) {
-            Ok(0) => break,
-            Ok(l) => {
-                len += l;
-                if len == buf.len() {
-                    buf.resize(buf.len() + BUFF_SIZE, 0);
-                } else {
-                    break;
-                }
-            }
-            Err(Errno::EAGAIN) => break,
-            Err(e) => return Err(e.into()),
-        }
-    }
-
-    buf.truncate(len);
-    return Ok(buf);
 }
