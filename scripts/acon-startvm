@@ -4,7 +4,7 @@
 
 dump_env() {
     while test $# -gt 0; do
-        eval "local readonly _V=\${$1:-(not\ set)}"
+        eval "local readonly _V=\"\${$1:-(not set)}\""
         printf '%s\t= %s\t# %s\n' $1 "$_V" "$2"
         shift 2
     done |

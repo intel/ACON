@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"aconcli/config"
+
 	"github.com/prometheus/procfs"
 )
 
@@ -105,7 +106,7 @@ func GetAllVM(vmNamePrefix string) ([]string, []string, error) {
 }
 
 func GetPid(connTarget string) (int, error) {
-	vmPids, conns, err := GetAllVM(config.AconVmName)
+	vmPids, conns, err := GetAllVM(config.AconVmPrefix)
 	if err != nil {
 		return -1, fmt.Errorf("get pid for (%s): %v", connTarget, err)
 	}
@@ -149,7 +150,7 @@ func getConnTarget(pid string) (string, error) {
 
 	var connTarget string
 	for _, ev := range environ {
-		if strings.HasPrefix(ev, "ACON_STARTVM_PARAM_CONN_TARGET") {
+		if strings.HasPrefix(ev, config.AconVmEnvTag) {
 			connTarget = ev
 			break
 		}

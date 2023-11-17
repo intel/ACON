@@ -10,8 +10,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 
+	"aconcli/config"
 	"aconcli/repo"
 	"aconcli/service"
 	"aconcli/vm"
@@ -166,14 +168,18 @@ func connect(conn string) (*service.AconClient, error) {
 	return service.NewAconConnection(conn)
 }
 
-func prepareEnvVsock() []string {
-	return []string{
-		"ACON_STARTVM_PARAM_VSOCK_CONN=acond.vsock_conn"}
+func prepareEnvVsock() string {
+	cid := os.Getenv("ATD_CID")
+	if cid == "" {
+		cid = strconv.Itoa(os.Getpid())
+		os.Setenv("ATD_CID", cid)
+	}
+	os.Setenv("ATD_KPARAMS", strings.TrimSpace(os.Getenv("ATD_KPARAMS")+" acond.vsock_conn"))
+	return cid
 }
 
-func prepareEnvTcp(connTarget string) []string {
-	return []string{
-		fmt.Sprintf("ATD_TCPFWD=%v:1025", connTarget)}
+func prepareEnvTcp(connTarget string) {
+	os.Setenv("ATD_TCPFWD", strings.Trim(fmt.Sprintf("%v:1025,%v", connTarget, os.Getenv("ATD_TCPFWD")), ", "))
 }
 
 func run(args []string) error {
@@ -196,22 +202,15 @@ func run(args []string) error {
 	}
 
 	if startnew {
-		env := os.Environ()
 		if !strings.HasPrefix(vmConnTarget, ":") {
-			cid := os.Getenv("ATD_CID")
-			vsock_env := prepareEnvVsock()
-			env = append(env, vsock_env...)
-			vmConnTarget = fmt.Sprintf("vsock://%v:%v", cid, vmConnTarget)
+			vmConnTarget = fmt.Sprintf("vsock://%v:%v", prepareEnvVsock(), vmConnTarget)
 		} else {
-			tcp_env := prepareEnvTcp(string(vmConnTarget[1:]))
-			env = append(env, tcp_env...)
+			prepareEnvTcp(string(vmConnTarget[1:]))
 			vmConnTarget = fmt.Sprintf("tcp://%v", vmConnTarget)
 		}
-		env = append(env,
-			fmt.Sprintf("ACON_STARTVM_PARAM_CONN_TARGET=%v", vmConnTarget))
 
 		var err error
-		cmd, err = vm.StartVM(startfile, debug, env)
+		cmd, err = vm.StartVM(startfile, debug, append(os.Environ(), config.AconVmEnvTag+vmConnTarget))
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Run: cannot start virtual machine, start script (%s): %v\n", startfile, err)
 			return err
