@@ -10,10 +10,10 @@ This chapter contains simple steps for building the Linux kernel and the initrd 
 
 ### Building Linux Kernel
 
-Firstly, the kernel source code must be downloaded. TDX support is being upstreamed at the time this guide is written, and the latest TDX guest code can be accessed at https://github.com/intel/tdx/tree/guest-next. The command below clones the repo.
+Firstly, the kernel source code must be downloaded. TDX support is being upstreamed at the time this guide is written, and the latest TDX guest code can be accessed at https://github.com/intel/tdx/tree/guest-attest. The command below clones the repo.
 
 ```sh
-git clone https://github.com/intel/tdx -b guest-next
+git clone https://github.com/intel/tdx -b guest-attest
 ```
 
 Then, configure the kernel. It's recommended to create a build directory separated from the kernel source directory. A sample kernel configuration file ([`config-acon`][file-config-acon]) is provided and can be used to configure a kernel using the commands below.
@@ -74,7 +74,7 @@ Here are the steps to create an initrd from the [`busybox` docker container imag
 2. Source the help script mentioned above.
 
    ```sh
-   source /path/to/acon_source/scripts/acon-build.env
+   . /path/to/acon_source/scripts/acon-build.env
    ```
 
 3. Invoke `get_initrd` to create the initrd image - The command below will create a new directory named `bbox/` along with a *CPIO* archive named `initrd-bbox.cpio`, in the current directory. `initrd-bbox.cpio` is the initrd image.
@@ -278,7 +278,7 @@ The rest of this guide provides details for building kernels and initrd images s
 
 ## Configuring Linux Kernel
 
-The TDX kernel patch is being upstreamed. Discussions in this section are based on Intel's fork at https://github.com/intel/tdx/tree/guest-next, which was based on Linux-6.4-rc1 at the time this doc was written.
+The TDX kernel patch is being upstreamed. Discussions in this section are based on Intel's fork at https://github.com/intel/tdx/tree/guest-attest, which was based on Linux-6.4-rc1 at the time this doc was written.
 
 ### Minimal Configuration
 A minimal kernel is important from both functionality and security standpoints.
