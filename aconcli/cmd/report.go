@@ -14,56 +14,14 @@ import (
 	"strconv"
 	"time"
 
+	"aconcli/attest"
 	"aconcli/service"
 	"github.com/spf13/cobra"
 )
 
 var isQuote bool
 
-const NUM_RTMRS = 4
-
-type TdReport struct {
-	ReportMac
-	TeeTcbInfo
-	Reserved [17]byte
-	TdInfo
-}
-
-type ReportType struct {
-	Type     byte
-	Subtype  byte
-	Version  byte
-	Reserved byte
-}
-
-type ReportMac struct {
-	ReportType
-	Reserved0      [12]byte
-	CpuSvn         [16]byte
-	TeeTcbInfoHash [48]byte
-	TeeInfoHash    [48]byte
-	ReportData     [64]byte
-	Reserved1      [32]byte
-	Mac            [32]byte
-}
-
-type TeeTcbInfo struct {
-	Data [239]byte
-}
-
-type TdInfo struct {
-	Attributes    [8]byte             // TD's attributes
-	Xfam          [8]byte             // TD's XFAM
-	Mrtd          [48]byte            // Measurement of initial contents of the TD
-	MrConfigId    [48]byte            // Software-defined ID for non-owner-defined configuration of the guest TD
-	MrOwner       [48]byte            // Software-defined ID for the guest TD's owner
-	MrOwnerConfig [48]byte            // Software-defined ID for owner-defined configuration of the guest TD
-	Rtmr          [NUM_RTMRS][48]byte // Array of NUM_RTMRS(4) run-time extendable measurement registers
-	ServTdHash    [48]byte
-	Reserved      [64]byte
-}
-
-func printReportType(reportType *ReportType) {
+func printReportType(reportType *attest.ReportType) {
 	if reportType.Type == 0 {
 		fmt.Fprintf(os.Stdout, "TEE Type: SGX\n")
 	} else if reportType.Type == 0x81 {
@@ -73,34 +31,34 @@ func printReportType(reportType *ReportType) {
 	fmt.Fprintf(os.Stdout, "Version: %v\n", reportType.Version)
 }
 
-func printReportMac(reportMac *ReportMac) {
+func printReportMac(reportMac *attest.ReportMac) {
 	fmt.Fprintf(os.Stdout, "--- Report Mac Struct ---\n")
 	printReportType(&reportMac.ReportType)
 	fmt.Fprintf(os.Stdout, "CPU SVN: 0x%v\n", hex.EncodeToString(reportMac.CpuSvn[:]))
-	fmt.Fprintf(os.Stdout, "TEE TCB Info Hash: 0x%v\n", hex.EncodeToString(reportMac.TeeTcbInfoHash[:]))
-	fmt.Fprintf(os.Stdout, "TEE Info Hash: 0x%v\n", hex.EncodeToString(reportMac.TeeInfoHash[:]))
-	fmt.Fprintf(os.Stdout, "Report Data: 0x%v\n", hex.EncodeToString(reportMac.ReportData[:]))
+	fmt.Fprintf(os.Stdout, "TEE TCB Info Hash: 0x%v\n", reportMac.TeeTcbInfoHash)
+	fmt.Fprintf(os.Stdout, "TEE Info Hash: 0x%v\n", reportMac.TeeInfoHash)
+	fmt.Fprintf(os.Stdout, "Report Data: 0x%v\n", reportMac.ReportData)
 	fmt.Fprintf(os.Stdout, "MAC: 0x%v\n", hex.EncodeToString(reportMac.Mac[:]))
 }
 
-func printTeeTcbInfo(teeTcbInfo *TeeTcbInfo) {
+func printTeeTcbInfo(teeTcbInfo *attest.TeeTcbInfo) {
 	fmt.Fprintf(os.Stdout, "--- TEE TCB Info ---\n")
 	fmt.Fprintf(os.Stdout, "0x%v\n", hex.EncodeToString(teeTcbInfo.Data[:]))
 }
 
-func printTdInfo(tdInfo *TdInfo) {
+func printTdInfo(tdInfo *attest.TdInfo) {
 	fmt.Fprintf(os.Stdout, "--- TD Info Struct ---\n")
-	fmt.Fprintf(os.Stdout, "Attributes: 0x%v\n", hex.EncodeToString(tdInfo.Attributes[:]))
-	fmt.Fprintf(os.Stdout, "XFAM: 0x%v\n", hex.EncodeToString(tdInfo.Xfam[:]))
-	fmt.Fprintf(os.Stdout, "MRTD: 0x%v\n", hex.EncodeToString(tdInfo.Mrtd[:]))
-	fmt.Fprintf(os.Stdout, "MR Config ID: 0x%v\n", hex.EncodeToString(tdInfo.MrConfigId[:]))
-	fmt.Fprintf(os.Stdout, "MR Owner: 0x%v\n", hex.EncodeToString(tdInfo.MrOwner[:]))
-	fmt.Fprintf(os.Stdout, "MR Owner Config: 0x%v\n", hex.EncodeToString(tdInfo.MrOwnerConfig[:]))
+	fmt.Fprintf(os.Stdout, "Attributes: %v\n", tdInfo.Attributes)
+	fmt.Fprintf(os.Stdout, "XFAM: %v\n", tdInfo.Xfam)
+	fmt.Fprintf(os.Stdout, "MRTD: %v\n", tdInfo.Mrtd)
+	fmt.Fprintf(os.Stdout, "MR Config ID: %v\n", tdInfo.MrConfigId)
+	fmt.Fprintf(os.Stdout, "MR Owner: %v\n", tdInfo.MrOwner)
+	fmt.Fprintf(os.Stdout, "MR Owner Config: %v\n", tdInfo.MrOwnerConfig)
 	fmt.Fprintf(os.Stdout, "RTMR:\n")
-	for i := range [NUM_RTMRS]int{} {
-		fmt.Fprintf(os.Stdout, "%d: 0x%v\n", i, hex.EncodeToString(tdInfo.Rtmr[i][:]))
+	for i := range [attest.NUM_RTMRS]int{} {
+		fmt.Fprintf(os.Stdout, "%d: %v\n", i, tdInfo.Rtmr[i])
 	}
-	fmt.Fprintf(os.Stdout, "Service TD Hash: 0x%v\n", hex.EncodeToString(tdInfo.ServTdHash[:]))
+	fmt.Fprintf(os.Stdout, "Service TD Hash: %v\n", tdInfo.ServTdHash)
 }
 
 func parseReport(report []byte) error {
@@ -108,7 +66,7 @@ func parseReport(report []byte) error {
 		return errors.New("report data length error")
 	}
 
-	reportStruct := TdReport{}
+	reportStruct := attest.TdReport{}
 	err := binary.Read(bytes.NewReader(report), binary.LittleEndian, &reportStruct)
 	if err != nil {
 		return fmt.Errorf("parse report: %v\n", err)
