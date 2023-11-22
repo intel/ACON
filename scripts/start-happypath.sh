@@ -163,6 +163,11 @@ run_workload() {
         ./aconcli invoke -c tcp://:5532 -e "$instance_id" Whoami
     fi
 
+    if test -n "$invoke"; then
+        log_note "Invoke CheckUid"
+        ./aconcli invoke -c tcp://:5532 -e "$instance_id" CheckUid
+    fi
+
     log_note "Stop ACON instances"
     ./aconcli shutdown -f tcp://:5532
 }
