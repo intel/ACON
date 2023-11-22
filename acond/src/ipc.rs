@@ -5,7 +5,6 @@ use crate::{image::AttestDataValue, pod::Pod, report, utils};
 use anyhow::{anyhow, Result};
 use std::{
     fs::{self, Permissions},
-    io::ErrorKind,
     mem,
     os::unix::prelude::PermissionsExt,
     path::Path,
@@ -45,6 +44,7 @@ struct AconGetReportReq {
 struct AconGetReportRsp {
     header: AconMessageHdr, // command = 1
     rtmr_count: i32,
+    rtmr_log_offset: i32,
     attestation_json_offset: i32,
     data_offset: i32,
 }
@@ -97,7 +97,7 @@ impl AconService {
         nonce: [u64; 2],
         attest_data_type: i32,
         attest_data: String,
-    ) -> Result<(i32, String, Vec<u8>)> {
+    ) -> Result<(i32, Vec<String>, String, Vec<u8>)> {
         let ref_pod = self.pod.clone();
         let pod = ref_pod.read().await;
 
@@ -113,15 +113,16 @@ impl AconService {
                 },
             )),
         )?;
+        let rtmr_log = utils::get_measurement_rtmr3()?;
 
         match request_type {
             0 => {
                 let report = report::get_report(&attest_data)?;
-                Ok((report::NUM_RTMRS, attest_data, report))
+                Ok((report::NUM_RTMRS, rtmr_log, attest_data, report))
             }
             1 => {
                 let quote = report::get_quote(&attest_data)?;
-                Ok((report::NUM_RTMRS, attest_data, quote))
+                Ok((report::NUM_RTMRS, rtmr_log, attest_data, quote))
             }
             _ => Err(anyhow!(utils::ERR_RPC_INVALID_REQUEST_TYPE)),
         }
@@ -180,7 +181,6 @@ async fn handle_request(stream: UnixStream, tx: mpsc::Sender<Request>) -> Result
 
                 offset += n;
             }
-            Err(ref e) if e.kind() == ErrorKind::WouldBlock => continue,
             Err(e) => return Err(e.into()),
         }
     }
@@ -204,10 +204,16 @@ async fn handle_request(stream: UnixStream, tx: mpsc::Sender<Request>) -> Result
     };
 
     loop {
+        let mut offset = 0;
+
         stream.writable().await?;
         match stream.try_write(&resp_bytes) {
-            Ok(_) => return Ok(()),
-            Err(ref e) if e.kind() == ErrorKind::WouldBlock => continue,
+            Ok(n) => {
+                offset += n;
+                if offset == resp_bytes.len() {
+                    return Ok(());
+                }
+            }
             Err(e) => return Err(e.into()),
         }
     }
@@ -255,9 +261,16 @@ async fn dispatch_request(request: &Request, service: &AconService) -> Result<Ve
                 )
                 .await
             {
-                Ok((rtmr_count, attest_data, data)) => {
+                Ok((rtmr_count, rtmr_log, attest_data, data)) => {
+                    let mut rtmr_log_bytes = vec![];
+                    for l in rtmr_log.iter() {
+                        let mut v = l.as_bytes().to_vec();
+                        rtmr_log_bytes.append(&mut v);
+                        rtmr_log_bytes.push(b'\n');
+                    }
+                    let rtmr_log_offset = mem::size_of::<AconGetReportRsp>();
                     let attest_data_bytes: &[u8] = attest_data.as_bytes();
-                    let attest_json_offset = mem::size_of::<AconGetReportRsp>();
+                    let attest_json_offset = rtmr_log_offset + rtmr_log_bytes.len();
                     let data_offset = attest_json_offset + attest_data_bytes.len();
 
                     let mut resp_bytes: Vec<u8> = vec![0; data_offset + data.len()];
@@ -267,13 +280,16 @@ async fn dispatch_request(request: &Request, service: &AconService) -> Result<Ve
                         (*get_report_resp).header.command = request.command + 1;
                         (*get_report_resp).header.size = resp_bytes.len() as u32;
                         (*get_report_resp).rtmr_count = rtmr_count;
+                        (*get_report_resp).rtmr_log_offset = rtmr_log_offset as i32;
                         (*get_report_resp).attestation_json_offset = attest_json_offset as i32;
                         (*get_report_resp).data_offset = data_offset as i32;
                     }
 
+                    resp_bytes[rtmr_log_offset..(rtmr_log_offset + rtmr_log_bytes.len())]
+                        .copy_from_slice(&rtmr_log_bytes);
                     resp_bytes[attest_json_offset..(attest_json_offset + attest_data_bytes.len())]
                         .copy_from_slice(attest_data_bytes);
-                    resp_bytes[data_offset..(data_offset + data.len())].copy_from_slice(&data[..]);
+                    resp_bytes[data_offset..(data_offset + data.len())].copy_from_slice(&data);
 
                     Ok(resp_bytes)
                 }
