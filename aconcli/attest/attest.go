@@ -2,6 +2,7 @@ package attest
 
 import (
 	"bytes"
+	"crypto/sha512"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
@@ -10,7 +11,10 @@ import (
 	"os/exec"
 )
 
-const NUM_RTMRS = 4
+const (
+	NUM_RTMRS = 4
+	rtmrSize  = sha512.Size384
+)
 
 type TdReport struct {
 	ReportMac
@@ -162,4 +166,15 @@ func VerifyQuote(path string) (bool, error) {
 	} else {
 		return true, nil
 	}
+}
+
+func GetRtmrValue(logs []string) []byte {
+	result := make([]byte, rtmrSize)
+	for _, log := range logs {
+		logSum := sha512.Sum384([]byte(log))
+		result = append(result, logSum[:]...)
+		sum := sha512.Sum384(result)
+		result = sum[:]
+	}
+	return result
 }

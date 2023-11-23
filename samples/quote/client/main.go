@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"crypto/sha512"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
@@ -14,8 +13,6 @@ import (
 
 	"aconcli/attest"
 )
-
-const rtmrSize = sha512.Size384
 
 type QuoteHeader struct {
 	RtmrLogOffset uint32
@@ -36,17 +33,6 @@ func dumpAttestInfo(a *attest.AttestData) {
 	}
 }
 
-func rtmr(logs []string) []byte {
-	result := make([]byte, rtmrSize)
-	for _, log := range logs {
-		logSum := sha512.Sum384([]byte(log))
-		result = append(result, logSum[:]...)
-		sum := sha512.Sum384(result)
-		result = sum[:]
-	}
-	return result
-}
-
 func main() {
 	conn, err := net.Dial("tcp", "localhost:8080")
 	if err != nil {
@@ -55,6 +41,7 @@ func main() {
 	}
 	defer conn.Close()
 
+	// get data from sample server
 	var data []byte
 	buf := make([]byte, 1024)
 	length := 0
@@ -71,6 +58,7 @@ func main() {
 		length += n
 	}
 
+	// parse quote, log and attestation data
 	header := new(QuoteHeader)
 	err = binary.Read(bytes.NewReader(data), binary.LittleEndian, header)
 	if err != nil {
@@ -103,24 +91,37 @@ func main() {
 		return
 	}
 
+	// verify quote using existing application from DCAP quote verify library
 	ok, err := attest.VerifyQuote("./quote.bin")
 	if !ok {
 		fmt.Fprintf(os.Stderr, "verify quote failed, error: %v\n", err)
+		return
 	} else {
 		fmt.Fprintf(os.Stdout, "verify quote successfully\n")
-		return
 	}
 
-	logs := strings.Split(string(rtmrLog), "\n")
-	logs = logs[:len(logs)-1]
-
+	// dislay attestation related information
 	a, err := attest.ParseAttestData(attestData)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "parse attest data error: %v\n", err)
 		return
 	}
 	dumpAttestInfo(a)
-	mr := rtmr(logs)
-	fmt.Fprintf(os.Stdout, "RTMR value: %v\n", hex.EncodeToString(mr))
-	return
+
+	// check whether rtmr values evaluated and rtmr value from quote match
+	logs := strings.Split(string(rtmrLog), "\n")
+	logs = logs[:len(logs)-1]
+	mr := hex.EncodeToString(attest.GetRtmrValue(logs))
+	r3 := quoteStruct.ReportBody.Rtmr[3]
+	mrFromQuote := hex.EncodeToString(r3.M[:])
+	if mr != mrFromQuote {
+		fmt.Fprintf(os.Stderr, "Evaluated RTMR value and RTMR value from quote do not match\n")
+		fmt.Fprintf(os.Stderr, "Evaluated: %v\n", mr)
+		fmt.Fprintf(os.Stderr, "From quote: %v\n", mrFromQuote)
+		return
+	} else {
+		fmt.Fprintf(os.Stderr, "Evaluated RTMR value and RTMR value from quote match\n")
+		fmt.Fprintf(os.Stderr, "RTMR value: %v\n", mr)
+		return
+	}
 }
