@@ -14,6 +14,7 @@ import (
 	"aconcli/repo"
 	"aconcli/service"
 	"aconcli/vm"
+
 	"github.com/spf13/cobra"
 )
 
@@ -105,7 +106,7 @@ func convertImageId(bundleId string) string {
 }
 
 func showStatus() error {
-	vmPids, conns, err := vm.GetAllVM(config.AconVmName)
+	vmPids, conns, err := vm.GetAllVM(config.AconVmPrefix)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Show Status: cannot fetch VM information: %v\n", err)
 		return err

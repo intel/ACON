@@ -18,5 +18,6 @@ const (
 	EntrypointName     = "/lib/acon/entrypoint.d/start"
 	ShortHashLen       = 12
 	DefaultCapSize     = 0x20000
-	AconVmName         = "aconvm"
+	AconVmPrefix       = "aconvm-"
+	AconVmEnvTag       = "__ACONVM="
 )
