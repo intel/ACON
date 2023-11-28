@@ -18,7 +18,7 @@ prctl = "1.0.0"
 nix = "0.26.2"
 libc = "0.2.121"
 anyhow = "1.0.56"
-openssl = "0.10.40"
+openssl = "0.10.60"
 data-encoding = "2.3.2"
 serde = { version = "1.0.126", features = ["derive"] }
 serde_json = "1.0.64"
