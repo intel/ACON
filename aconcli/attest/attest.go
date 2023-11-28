@@ -178,3 +178,18 @@ func GetRtmrValue(logs []string) []byte {
 	}
 	return result
 }
+
+func VerifyRtmr(quote []byte, logs []string) (bool, error) {
+	quoteStruct, err := ParseQuote(quote)
+	if err != nil {
+		return false, fmt.Errorf("verify rtmr error: %v", err)
+	}
+	mr := hex.EncodeToString(GetRtmrValue(logs))
+	r := quoteStruct.ReportBody.Rtmr[3]
+	mrFromQuote := hex.EncodeToString(r.M[:])
+	if mr == mrFromQuote {
+		return true, nil
+	} else {
+		return false, fmt.Errorf("rtmr does not match")
+	}
+}
