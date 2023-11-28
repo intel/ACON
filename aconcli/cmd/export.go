@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 
 	"aconcli/repo"
+
 	"github.com/spf13/cobra"
 )
 
@@ -41,6 +42,10 @@ be exported.
 }
 
 func exportBundles(args []string) error {
+	if ignoreSig {
+		return fmt.Errorf("flag '--ignoresig' is yet to be implemented")
+	}
+
 	manifestFile := args[0]
 	startingDir := filepath.Dir(manifestFile)
 	if targetDir != "" {
@@ -62,7 +67,7 @@ func exportBundles(args []string) error {
 func init() {
 	rootCmd.AddCommand(releaseCmd)
 	releaseCmd.Flags().BoolVarP(&ignoreSig, "ignoresig", "", false,
-		"ignoring missing signature file while exporting image")
+		"ignoring missing signature file while exporting image (unimplemented)")
 	releaseCmd.Flags().StringVarP(&exportName, "output", "o", "",
 		"output tarball file name")
 	releaseCmd.MarkFlagRequired("output")
