@@ -21,7 +21,7 @@ The ACON Daemon executable has the file name `acond`, hence is referred to as `a
 
 ### Building `acond` in `rust` Container
 
-It's recommended to use the [`rust`][rust-docker] docker container image to build `acond` because it's easy to setup and also necessary to reproduce the `acond` binary.
+It's recommended to use the [`rust`][rust-docker] docker container image to build `acond` because it's easy to setup and also necessary for reproducible builds.
 
 #### Prerequisites
 
@@ -85,7 +85,7 @@ It's worth noting that both `./build` and `./build_static` pass through their co
 
 `start_rust_buildenv` supports [Alpine][alpine-linux] Linux only, so building a [glibc][gnu-libc] based `acond` must be done manually as of this writing.
 
-**Note**: [`rust`][rust-docker] supports [Debian][debian-linux] and [Ubuntu][ubuntu-linux] as two options for its [glibc][gnu-libc] toolchains. `rust:slim` is used here for demonstration purpose and can be substituded by any variant of Debian or Ubuntu. See [here][rust-docker-tags] for a complete list of tags.
+**Note**: [`rust`][rust-docker] supports [Debian][debian-linux] and [Ubuntu][ubuntu-linux] as two options for its [glibc][gnu-libc] toolchains. `rust:slim` is used here for demonstration purpose and can be substituted by any variant of Debian or Ubuntu. See [here][rust-docker-tags] for a complete list of tags.
 
 1. Build a container image from `rust:slim` (which is based on Debian *bookworm* as of this writing) with dependencies installed.
 
@@ -179,7 +179,7 @@ RUSTAG=1.72.0-alpine${VERSION%.*} start_rust_buildenv
   CARGO_BUILD_RUSTFLAGS=-Ctarget-feature=-crt-static cargo build -r -Ffull
   ```
 
-## Building initrd Image
+## Running and Debugging
 
 TBD
 

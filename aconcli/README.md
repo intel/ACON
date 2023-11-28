@@ -12,43 +12,50 @@ To build and run `aconcli`, you need Golang, protocol buffer, and Go plugins for
 
 To build `aconcli` project, change to the project's top level directory:
 
-`$ go generate && go build`
+```sh
+go generate && go build # `-ldflags "-s -w"` can optionally be appended to strip symbols
+```
 
 To clean up:
 
-`$ go clean`
+```sh
+go clean
+```
 
 ## Running the aconcli tool
 
 To see available commands run:
+
 ```
 aconcli -h
 ```
 
-The general format of aconcli commands is:
+The general format of `aconcli` commands is:
+
 ```
-aconcli [GLOBAL_OPTION]... COMMAND [COMMAND_OPTION]...
+aconcli [global_flags]... command [flags]...
 ```
+
+Shell completion is supported. For example, to add completion to the current `bash`:
+
+```sh
+. <(aconcli completion bash)
+```
+
 
 ## About the sample ACON-VM start sript
 
-With `aconcli`, a sample ACON-VM start script is provided. This is used by `aconcli` to launch a ACON-VM. Environment variables are used in this script file to set up the virtual machine. Users can provide their own start script while adhering to the semantics of these environment variables.
+With `aconcli`, a [default ACON-VM start script](acon-startvm) is provided to launch *ACON VM*s (*aVM* for short hereon). Environment variables are used by `aconcli run` (and potentially users as well) to convey parameters to customize the script's behavior. Users can supply their own start scripts but they must adhere to the semantics of the environment variables listed in the table below.
 
-The environment variables being used are:
-
-- ACON_STARTVM_PARAM_VP_NUM: Number of virtual CPU, default to 4
-
-- ACON_STARTVM_PARAM_MEM: Memory size of the virtual machine, default to 2 GB
-
-- ACON_STARTVM_PARAM_KA: Additional kernel arguments, default to empty
-
-- ACON_STARTVM_PARAM_TCPFWD: TCP host forward setting. `aconcli` will be responsible for setting it up according to the argument user provides when invoking it.
-
-- ACON_STARTVM_PARAM_RAMDISK: Location of the init ramdisk image. If omitted, the ramdisk named 'initrd.img' will be searched in the same directory as `aconcli` executable.
-
-- ACON_STARTVM_PARAM_KERNEL: Location of the VM kernel image. If omitted, the kernel image named 'kernel.img' will be searched in the same directory as `aconcli` executable
-
-- TD: Non-empty string indicates that TDX should be enabled in the virtual machine and the hostname will be 'acon-${TD}'. Default to empty string, which means TDX will not be enabled.
-
-- CID: VSOCK CID of the virual machine. Need to specify it when user chooses VSOCK to connect to `acond`.
- 
+|ENV VAR|Description
+|-|-
+|`ATD`|Set (to any non-nil string) to launch TD; unset to launch VM. `td-$ATD` will be used as the host name of the *aTD*.
+|`ATD_QEMU`|Executable name (or path) of *QEMU*, default `qemu-kvm`.
+|`ATD_CID`|VSOCK CID of the *aTD*.<ul><li>Unset (default) - disable VSOCK support. <li>`$ATD_CID <= 2` - *PID* will be used as CID. <li>Otherwise - `$ATD_CID` will be used as CID as is.
+|`ATD_MEMSZ`|*aTD* memory size, default `1g` (1GB).
+|`ATD_NVP`|Number of virtual processors, default `1`.
+|`ATD_TCPFWD`|TCP forwarding rules - a comma (`,`) separated list of rules in the form of `[host_port:]guest_port`. For example,<ul><li>`ATD_TCPFWD=1025` - Forward guest port `1025` to the same port (`1025`) on the host. <li>`ATD_TCPFWD=5022:22,1025` - Forward guest port `22` to host port `5022` and guest port `1025` to host port `1025`.</ul> `aconcli run` **appends** to `$ATD_TCPFWD` to forward `acond` port to the host. Users can set up forwarding rules for containers by setting this variable prior to invoking `aconcli`.
+|`ATD_BIOS`|Path to the virtual BIOS image, default `/usr/share/qemu/OVMF.fd`.
+|`ATD_RD`|Path to the initrd image, default `initrd.img` in the same directory as where the script resides.
+|`ATD_KERNEL`|Path to the guest kernel, default `vmlinuz` in the same directory as where the script resides.
+|`ATD_KPARAMS`|Additional kernel command line. `aconcli run` **appends** to `$ATD_KPARAMS` to pass parameters to `acond`.
