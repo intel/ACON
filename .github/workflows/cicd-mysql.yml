@@ -23,4 +23,6 @@ jobs:
     - name: Enable MySQL docker
       run: |
         source scripts/start-happypath.sh
-        ATD_MEMSZ=8g run_workload -d test -i mysql -j '.writableFS=true | .uids+=[999] | .entrypoint+=["mysqld"] | .env+=["MYSQL_ROOT_PASSWORD=my-secret-pw"]'
+        ATD_MEMSZ=8g ATD_TCPFWD=3306 run_workload -d test -i mysql -j '.writableFS=true | .uids+=[999] | .entrypoint+=["mysqld"] | .env+=["MYSQL_ROOT_PASSWORD=my-secret-pw"]'
+        mysql -u root -pmy-secret-pw -h 127.0.0.1 --silent --execute="SHOW DATABASES"
+        echo "Stop ACON instances" && cd aconcli && ./aconcli shutdown -f tcp://:5532

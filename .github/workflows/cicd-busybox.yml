@@ -24,3 +24,4 @@ jobs:
       run: |
         source scripts/start-happypath.sh
         run_workload -d test -i acon_busybox -f bundle.dockerfile -j '.uids+=[2] | .writableFS=true' -o invoke
+        echo "Stop ACON instances" && cd aconcli && ./aconcli shutdown -f tcp://:5532
