@@ -19,7 +19,10 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var isQuote bool
+var (
+	isQuote bool
+	file    string
+)
 
 func printReportType(reportType *attest.ReportType) {
 	if reportType.Type == 0 {
@@ -145,11 +148,7 @@ func getReport(args []string) error {
 	fmt.Fprintf(os.Stdout, "mrlog3:\n%v\n", mrlog3)
 	fmt.Fprintf(os.Stdout, "attestation data:\n%v\n", attest_data)
 
-	filepath := "report.bin"
-	if isQuote {
-		filepath = "quote.bin"
-	}
-	if err := os.WriteFile(filepath, data, 0600); err != nil {
+	if err := os.WriteFile(file, data, 0600); err != nil {
 		return err
 	}
 
@@ -166,4 +165,8 @@ func init() {
 	reportCmd.Flags().StringVarP(&vmConnTarget, "connect", "c", "",
 		"connection target for the ACON virtual machine")
 	reportCmd.MarkFlagRequired("conn")
+	reportCmd.Flags().BoolVarP(&isQuote, "quote", "q", false,
+		"getting quote instead of getting report")
+	reportCmd.Flags().StringVarP(&file, "file", "f", "",
+		"file path to dump the report or quote raw data")
 }
