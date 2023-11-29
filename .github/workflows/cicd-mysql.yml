@@ -25,4 +25,4 @@ jobs:
         source scripts/start-happypath.sh
         ATD_MEMSZ=8g ATD_TCPFWD=3306 run_workload -d test -i mysql -j '.writableFS=true | .uids+=[999] | .entrypoint+=["mysqld"] | .env+=["MYSQL_ROOT_PASSWORD=my-secret-pw"]'
         echo intel@123 | sudo apt install mysql-server && mysql -u root -pmy-secret-pw -h 127.0.0.1 --silent --execute="SHOW DATABASES"
-        echo "Stop ACON instances" && cd aconcli && ./aconcli shutdown -f tcp://:5532
+        echo "Stop ACON instances" && cd test && ./aconcli shutdown -f tcp://:5532
