@@ -39,15 +39,11 @@ log_error() {
 }
 
 get_options() {
-    while getopts "d:i:f:j:o:h" opt; do
+    while getopts "d:h" opt; do
         case $opt in
             d) bundle_dir="$OPTARG";;
-            i) docker_id="$OPTARG";;
-            f) docker_file="$OPTARG";;
-            j) jq_string="$OPTARG";;
-            o) invoke="$OPTARG";;
             h) opt_h=1
-               echo "Usage: run_workload -d bundle_dir -i container -f docker_file [-h]"
+               echo "Usage: run_workload -d bundle_dir [-h]"
                ;;
             \?) echo "Invalid option: -$OPTARG" >&2
                 return 1
@@ -56,66 +52,7 @@ get_options() {
     done
 }
 
-run_workload() {
-    get_options "$@"
-
-    if [ "$opt_h" == 1 ]; then
-        return 0
-    fi
-
-    if test -z "$jq_string"; then
-        jq_string=".writableFS=true"
-    fi
-
-    test -d "$bundle_dir" && {
-        log_warn "$bundle_dir directory already exist and will be cleared" 
-        rm -rf $bundle_dir
-    }
-
-    local readonly acon_root=$(git rev-parse --show-toplevel)
-    test -d "$acon_root" || {
-        log_error "Failed to deduce ACON root from current directory"
-        return 2
-    }
-
-    log_note "Prepare kernel.img and OVMF.fd"
-    git clone https://github.com/billionairiam/KernelAndOVFD.git $bundle_dir || {
-        log_error "Failed to clone the repository."
-        return 2
-    }
-    
-
-    log_note "Build aconcli"
-    cd "$acon_root/aconcli" && go generate && go build || {
-        log_error "Build aconcli error."
-        return 2
-    }
-
-    log_note "Build acond"
-    source "$acon_root/scripts/acon-build.env" && U=. start_rust_buildenv -- ./build_static -r || {
-        log_error "Build acond error or timeout"
-        return 2
-    }
-    
-
-    log_note "Generate initrd"
-    cd ../$bundle_dir && mkdir initrd.d && INIT=/bin/acond gen_initrd initrd.d busybox:latest || {
-        log_error "gen_initrd failed"
-        return 2
-    }
-
-    log_note "Create initrd"
-    cp "$acon_root/acond/target/release/acond" initrd.d/bin/acond
-    create_initrd initrd.d/ ./initrd.img || {
-        log_error "create_initrd failed"
-    }
-
-    log_note "Init bundle directory"
-    cp "$acon_root/aconcli/aconcli" . && ./aconcli init . || {
-        log_error "Init bundle directory error"
-        return 2
-    }
-
+check_instance() {
     log_note "Build bundle"
     if test -n "$docker_file"; then
         docker build -f "$docker_file" -t "$docker_id" .
@@ -167,7 +104,82 @@ run_workload() {
         log_note "Invoke CheckUid"
         ./aconcli invoke -c tcp://:5532 -e "$instance_id" CheckUid
     fi
+}
 
-    log_note "Stop ACON instances"
+run_workload() {
+    get_options "$@"
+
+    if [ "$opt_h" == 1 ]; then
+        return 0
+    fi
+
+    test -d "$bundle_dir" && {
+        log_warn "$bundle_dir directory already exist and will be cleared" 
+        rm -rf $bundle_dir
+    }
+
+    local readonly acon_root=$(git rev-parse --show-toplevel)
+    test -d "$acon_root" || {
+        log_error "Failed to deduce ACON root from current directory"
+        return 2
+    }
+
+    log_note "Prepare kernel.img and OVMF.fd"
+    git clone https://github.com/billionairiam/KernelAndOVFD.git $bundle_dir || {
+        log_error "Failed to clone the repository."
+        return 2
+    }
+
+    log_note "Build aconcli"
+    cd "$acon_root/aconcli" && go generate && go build || {
+        log_error "Build aconcli error."
+        return 2
+    }
+
+    log_note "Build acond"
+    source "$acon_root/scripts/acon-build.env"
+    # source "$acon_root/scripts/acon-build.env" && U=. start_rust_buildenv -- ./build_static -r || {
+    #     log_error "Build acond error or timeout"
+    #     return 2
+    # }
+    
+
+    log_note "Generate initrd"
+    cd ../$bundle_dir && mkdir initrd.d && INIT=/bin/acond gen_initrd initrd.d busybox:latest || {
+        log_error "gen_initrd failed"
+        return 2
+    }
+
+    log_note "Create initrd"
+    cp "$acon_root/acond/target/release/acond" initrd.d/bin/acond
+    create_initrd initrd.d/ ./initrd.img || {
+        log_error "create_initrd failed"
+    }
+
+    log_note "Init bundle directory for BusyBox"
+    cp "$acon_root/aconcli/aconcli" . && ./aconcli init . || {
+        log_error "Init BusyBox bundle directory error"
+        return 2
+    }
+
+    log_note "Check BusyBox Instance"
+    invoke=1 docker_file=bundle.dockerfile docker_id=acon_busybox jq_string='.uids+=[2] | .writableFS=true' check_instance
+
+    log_note "Stop $docker_id instances"
+    ./aconcli shutdown -f tcp://:5532
+
+    log_note "Init bundle directory for MySQL"
+    rm -rf .acon && ./aconcli init . || {
+        log_error "Init MySQL bundle directory error"
+        return 2
+    }
+
+    log_note "Check MySQL Instance"
+    docker_id=mysql ATD_TCPFWD=3306 ATD_MEMSZ=8g jq_string='.writableFS=true | .uids+=[999] | .entrypoint+=["mysqld"] | .env+=["MYSQL_ROOT_PASSWORD=my-secret-pw"]' check_instance
+
+    log_note "Check MySQL Status"
+    mysql -u root -pmy-secret-pw -h "127.0.0.1" --silent --execute="SHOW DATABASES"
+
+    log_note "Stop $docker_id instances"
     ./aconcli shutdown -f tcp://:5532
 }

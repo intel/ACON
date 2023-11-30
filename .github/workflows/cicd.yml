@@ -1,4 +1,4 @@
-name: CICD-MySQL
+name: CICD-BusyBox
 
 on:
   push:
@@ -17,10 +17,10 @@ jobs:
   CICD:
 
     runs-on: self-hosted
-    name: CICD-MySQL
+    name: CICD-BusyBox
     steps:
     - uses: actions/checkout@v3
-    - name: Enable MySQL docker
+    - name: Enable busybox docker
       run: |
         source scripts/start-happypath.sh
-        ATD_MEMSZ=8g run_workload -d test -i mysql -j '.writableFS=true | .uids+=[999] | .entrypoint+=["mysqld"] | .env+=["MYSQL_ROOT_PASSWORD=my-secret-pw"]'
+        run_workload -d test
