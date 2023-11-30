@@ -137,11 +137,10 @@ run_workload() {
     }
 
     log_note "Build acond"
-    source "$acon_root/scripts/acon-build.env"
-    # source "$acon_root/scripts/acon-build.env" && U=. start_rust_buildenv -- ./build_static -r || {
-    #     log_error "Build acond error or timeout"
-    #     return 2
-    # }
+    source "$acon_root/scripts/acon-build.env" && U=. start_rust_buildenv -- ./build_static -r || {
+        log_error "Build acond error or timeout"
+        return 2
+    }
     
 
     log_note "Generate initrd"

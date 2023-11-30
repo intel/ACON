@@ -1,4 +1,4 @@
-name: CICD-BusyBox
+name: CICD
 
 on:
   push:
@@ -17,7 +17,7 @@ jobs:
   CICD:
 
     runs-on: self-hosted
-    name: CICD-BusyBox
+    name: CICD
     steps:
     - uses: actions/checkout@v3
     - name: Enable busybox docker
