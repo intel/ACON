@@ -16,7 +16,6 @@ use std::{
 pub const EXTEND_RTMR_DATA_SIZE: usize = 0x30;
 pub const REPORT_DATA_SIZE: usize = 0x40;
 pub const REPORT_SIZE: usize = 0x400;
-pub const NUM_RTMRS: i32 = 4;
 
 const TDX_GUEST: &str = "/dev/tdx_guest";
 const REQ_BUF_SIZE: usize = 0x4000;

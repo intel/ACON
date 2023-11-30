@@ -43,7 +43,6 @@ struct AconGetReportReq {
 #[derive(Debug, Clone, Copy)]
 struct AconGetReportRsp {
     header: AconMessageHdr, // command = 1
-    rtmr_count: i32,
     rtmr_log_offset: i32,
     attestation_json_offset: i32,
     data_offset: i32,
@@ -97,7 +96,7 @@ impl AconService {
         nonce: [u64; 2],
         attest_data_type: i32,
         attest_data: String,
-    ) -> Result<(i32, Vec<String>, String, Vec<u8>)> {
+    ) -> Result<(String, String, Vec<u8>)> {
         let ref_pod = self.pod.clone();
         let pod = ref_pod.read().await;
 
@@ -113,16 +112,21 @@ impl AconService {
                 },
             )),
         )?;
-        let rtmr_log = utils::get_measurement_rtmr3()?;
+        let mut rtmr_log = "\0\0\0".to_string(); // log of 0-2 is dismissed.
+        let rtmr_log3 = utils::get_measurement_rtmr3()?;
+        for l in rtmr_log3.iter() {
+            rtmr_log.push_str(l);
+            rtmr_log.push_str("\0");
+        }
 
         match request_type {
             0 => {
                 let report = report::get_report(&attest_data)?;
-                Ok((report::NUM_RTMRS, rtmr_log, attest_data, report))
+                Ok((rtmr_log, attest_data, report))
             }
             1 => {
                 let quote = report::get_quote(&attest_data)?;
-                Ok((report::NUM_RTMRS, rtmr_log, attest_data, quote))
+                Ok((rtmr_log, attest_data, quote))
             }
             _ => Err(anyhow!(utils::ERR_RPC_INVALID_REQUEST_TYPE)),
         }
@@ -261,13 +265,8 @@ async fn dispatch_request(request: &Request, service: &AconService) -> Result<Ve
                 )
                 .await
             {
-                Ok((rtmr_count, rtmr_log, attest_data, data)) => {
-                    let mut rtmr_log_bytes = vec![];
-                    for l in rtmr_log.iter() {
-                        let mut v = l.as_bytes().to_vec();
-                        rtmr_log_bytes.append(&mut v);
-                        rtmr_log_bytes.push(b'\n');
-                    }
+                Ok((rtmr_log, attest_data, data)) => {
+                    let rtmr_log_bytes = rtmr_log.as_bytes();
                     let rtmr_log_offset = mem::size_of::<AconGetReportRsp>();
                     let attest_data_bytes: &[u8] = attest_data.as_bytes();
                     let attest_json_offset = rtmr_log_offset + rtmr_log_bytes.len();
@@ -279,7 +278,6 @@ async fn dispatch_request(request: &Request, service: &AconService) -> Result<Ve
                     unsafe {
                         (*get_report_resp).header.command = request.command + 1;
                         (*get_report_resp).header.size = resp_bytes.len() as u32;
-                        (*get_report_resp).rtmr_count = rtmr_count;
                         (*get_report_resp).rtmr_log_offset = rtmr_log_offset as i32;
                         (*get_report_resp).attestation_json_offset = attest_json_offset as i32;
                         (*get_report_resp).data_offset = data_offset as i32;

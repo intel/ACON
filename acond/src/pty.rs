@@ -169,8 +169,11 @@ pub async fn run_terminal_server(mut rx: mpsc::Receiver<Command>) -> Result<()> 
                     terminal_list.enter_terminal(master)?;
 
                     let terminal = terminal_list.terminals.get(&master).unwrap();
-                    let prompt = terminal.prompt.as_ref().unwrap().clone();
-                    let _ = resp.send(Some(prompt));
+                    if let Some(prompt) = terminal.prompt.as_ref() {
+                        let _ = resp.send(Some(prompt.clone()));
+                    } else {
+                        let _ = resp.send(Some(vec![]));
+                    }
                 } else {
                     let _ = resp.send(None);
                 }
