@@ -1,0 +1,26 @@
+name: CICD-PostGreSQL
+
+on:
+  push:
+    branches: [ "main" ]
+    paths-ignore:
+      - 'doc/**'
+  pull_request:
+    branches: [ "main" ]
+    paths-ignore:
+      - 'doc/**'
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  CICD:
+
+    runs-on: self-hosted
+    name: CICD-PostGreSQL
+    steps:
+    - uses: actions/checkout@v3
+    - name: Enable PostGreSQL docker
+      run: |
+        source scripts/start-happypath.sh
+        ATD_MEMSZ=8g run_workload -d test -i postgres -j '.writableFS=true | .uids+=[999, 101] | .entrypoint+=["postgres"] | .env+=["POSTGRES_PASSWORD=mysecretpassword"]'
