@@ -14,6 +14,13 @@ import (
 	"aconcli/attest"
 )
 
+const (
+	RtmrLog0 uint = iota
+	RtmrLog1
+	RtmrLog2
+	RtmrLog3
+)
+
 type QuoteHeader struct {
 	RtmrLogOffset uint32
 	AttestOffset  uint32
@@ -109,10 +116,10 @@ func main() {
 	dumpAttestInfo(a)
 
 	// check whether evaluated rtmr value and rtmr value from quote match
-	logs := strings.Split(string(rtmrLog[3:]), "\x00")
+	logs := strings.Split(string(rtmrLog[RtmrLog3:]), "\x00")
 	logs = logs[:len(logs)-1]
 	mr := hex.EncodeToString(attest.GetRtmrValue(logs))
-	r3 := quoteStruct.ReportBody.Rtmr[3]
+	r3 := quoteStruct.ReportBody.Rtmr[RtmrLog3]
 	mrFromQuote := hex.EncodeToString(r3.M[:])
 	if mr != mrFromQuote {
 		fmt.Fprintf(os.Stderr, "Evaluated RTMR value and RTMR value from quote do not match\n")
