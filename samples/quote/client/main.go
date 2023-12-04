@@ -108,8 +108,8 @@ func main() {
 	}
 	dumpAttestInfo(a)
 
-	// check whether rtmr values evaluated and rtmr value from quote match
-	logs := strings.Split(string(rtmrLog), "\n")
+	// check whether evaluated rtmr value and rtmr value from quote match
+	logs := strings.Split(string(rtmrLog[3:]), "\x00")
 	logs = logs[:len(logs)-1]
 	mr := hex.EncodeToString(attest.GetRtmrValue(logs))
 	r3 := quoteStruct.ReportBody.Rtmr[3]
