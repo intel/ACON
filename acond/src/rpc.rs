@@ -46,12 +46,12 @@ impl TDAconService {
 
     async fn send_recv(&self, command: u8, buf: &mut Vec<u8>) -> Result<Vec<u8>> {
         buf.insert(0, command);
+
         let mut send_buf = (buf.len() as u32).to_ne_bytes().to_vec();
         send_buf.append(buf);
+        acond_io::write_async_lock(self.stream.clone(), &send_buf, send_buf.len()).await?;
 
-        acond_io::write_async_lock(self.stream.clone(), &send_buf).await?;
         let recv_buf = acond_io::read_async_lock(self.stream.clone()).await?;
-
         if recv_buf.is_empty() {
             return Err(anyhow!(utils::ERR_UNEXPECTED));
         }
@@ -65,20 +65,20 @@ impl TDAconService {
         file: &NamedTempFile,
     ) -> Result<Vec<u8>> {
         buf.insert(0, command);
+
         let mut send_buf = (buf.len() as u32).to_ne_bytes().to_vec();
         send_buf.append(buf);
+        acond_io::write_async_lock(self.stream.clone(), &send_buf, send_buf.len()).await?;
 
-        acond_io::write_async_lock(self.stream.clone(), &send_buf).await?;
         {
             let ref_stream = self.stream.clone();
             let stream = ref_stream.lock().await;
             stream.send_fd(file.as_raw_fd()).await?;
-
             unistd::close(file.as_raw_fd()).map_err(|_| Status::unknown(utils::ERR_UNEXPECTED))?;
             unistd::unlink(file.path()).map_err(|_| Status::unknown(utils::ERR_UNEXPECTED))?;
         }
-        let recv_buf = acond_io::read_async_lock(self.stream.clone()).await?;
 
+        let recv_buf = acond_io::read_async_lock(self.stream.clone()).await?;
         if recv_buf.is_empty() {
             return Err(anyhow!(utils::ERR_UNEXPECTED));
         }

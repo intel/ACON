@@ -71,7 +71,7 @@ public:
             return NULL;
         }
 
-        unique_ptr<uint8_t[]> msg_buf(new uint8_t[msg_hdr.size + 1]);
+        auto msg_buf = make_unique<uint8_t[]>(msg_hdr.size + 1);
         memcpy(msg_buf.get(), &msg_hdr, msg_hdr_size);
         msg_buf[msg_hdr.size] = '\0';
 
@@ -126,7 +126,7 @@ unique_ptr<uint8_t[]> get_quote(size_t *size)
     size_t send_buf_hdr_size = sizeof(acon_get_report_req_t);
     size_t send_buf_body_size = strlen(attest_data);
     size_t send_buf_size = send_buf_hdr_size + send_buf_body_size;
-    unique_ptr<uint8_t[]> send_buf(new uint8_t[send_buf_size]);
+    auto send_buf = make_unique<uint8_t[]>(send_buf_size);
 
     acon_get_report_req_t get_report_req = {0};
     get_report_req.header.command = 0;
@@ -146,7 +146,7 @@ unique_ptr<uint8_t[]> get_quote(size_t *size)
         return NULL;
     }
 
-    unique_ptr<uint8_t[]> recv_buf = socket.recv_msg();
+    auto recv_buf = socket.recv_msg();
     if (recv_buf == NULL)
     {
         return NULL;
@@ -161,7 +161,7 @@ unique_ptr<uint8_t[]> get_quote(size_t *size)
         return NULL;
     }
 
-    unique_ptr<uint8_t[]> buf(new uint8_t[sizeof(quote_header) + get_report_rsp->header.size - sizeof(acon_get_report_rsp_t)]);
+    auto buf = make_unique<uint8_t[]>(sizeof(quote_header) + get_report_rsp->header.size - sizeof(acon_get_report_rsp_t));
 
     quote_header *quote = (quote_header *)buf.get();
     quote->rtmr_log_offset = sizeof(quote_header);
@@ -212,7 +212,7 @@ int main(int argc, char *argv[])
         }
 
         size_t data_size;
-        unique_ptr<uint8_t[]> data = get_quote(&data_size);
+        auto data = get_quote(&data_size);
         ssize_t ret = send(sock_fd, data.get(), data_size, 0);
 
         close(sock_fd);

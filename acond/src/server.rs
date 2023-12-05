@@ -209,7 +209,7 @@ async fn start_service(
             },
         };
 
-        acond_io::write_async(&mut stream, &send_buf).await?;
+        acond_io::write_async(&mut stream, &send_buf, send_buf.len()).await?;
     }
 }
 
