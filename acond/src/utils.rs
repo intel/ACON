@@ -74,7 +74,9 @@ const RTMR3_LOG: &str = "rtmr3.log";
 pub const SHA256: &str = "sha256";
 pub const SHA384: &str = "sha384";
 pub const SHA512: &str = "sha512";
+
 pub const BUFF_SIZE: usize = 0x400;
+pub const MAX_BUFF_SIZE: usize = 0x100000;
 
 // Reserve 1 for the deprivileged process
 static CONTAINER_SERIES: AtomicUsize = AtomicUsize::new(2);

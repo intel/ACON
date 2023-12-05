@@ -77,7 +77,7 @@ typedef struct {
 
 typedef struct {
     acon_message_hdr_t header;   // command = 1
-    int32_t rtmr_count;
+    int32_t rtmr_log_offset;
     int32_t attestation_json_offset;
     int32_t data_offset;
 } acon_get_report_rsp_t;
