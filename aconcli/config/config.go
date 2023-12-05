@@ -15,7 +15,6 @@ const (
 	CertFileName       = "signer.cer"
 	PrivKeyFileName    = "private_key.pem"
 	SignatureFileName  = "signature"
-	EntrypointName     = "/lib/acon/entrypoint.d/start"
 	ShortHashLen       = 12
 	DefaultCapSize     = 0x20000
 	AconVmPrefix       = "aconvm-"
