@@ -24,12 +24,12 @@ test -n "$ATD_CID" && test $ATD_CID -le 2 && ATD_CID=$$
 CMD="${ATD_QEMU:=qemu-kvm} -nographic                                   \
     -name process=aconvm-$$                                             \
     -accel kvm                                                          \
-    ${ATD:+-object tdx-guest,id=tdx}                                    \
-    ${ATD:+-object memory-backend-memfd-private,id=ram1,size=${ATD_MEMSZ:=1g}}  \
-    -machine q35${ATD:+,memory-backend=ram1,kernel_irqchip=split,confidential-guest-support=tdx}    \
-    -cpu host,-kvm-steal-time,pmu=off                                   \
     -smp ${ATD_NVP:=1}                                                  \
     -m ${ATD_MEMSZ:=1g}                                                 \
+    ${ATD:+-object tdx-guest,id=tdx,quote-generation-service=${ATD_QGS:=vsock:2:4050}}  \
+    ${ATD:+-object memory-backend-memfd-private,id=ram1,size=$ATD_MEMSZ}\
+    -machine q35${ATD:+,memory-backend=ram1,kernel_irqchip=split,confidential-guest-support=tdx}    \
+    -cpu host,-kvm-steal-time,pmu=off                                   \
     -nodefaults -vga none -no-hpet                                      \
     -nic user,model=virtio,ipv6=off,ipv4=on,hostname=${ATD:+td-}${ATD:-vm}$(host_fwd $ATD_TCPFWD)   \
     ${ATD_CID:+-device vhost-vsock-pci,guest-cid=$ATD_CID}              \
@@ -44,6 +44,7 @@ CMD="${ATD_QEMU:=qemu-kvm} -nographic                                   \
 
 dump_env    \
     ATD         "launch ${ATD:+td-}${ATD:-vm}"          \
+    ATD_QGS     "Location of QGS"                       \
     ATD_QEMU    "QEMU executable"                       \
     ATD_CID     "VSOCK CID"                             \
     ATD_MEMSZ   "memory size"                           \
