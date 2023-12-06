@@ -166,14 +166,17 @@ func connect(conn string) (*service.AconClient, error) {
 	return service.NewAconConnection(conn)
 }
 
-func prepareEnvVsock() []string {
-	return []string{
-		"ACON_STARTVM_PARAM_VSOCK_CONN=acond.vsock_conn"}
+func prepareEnvVsock() string {
+	return "ACON_STARTVM_PARAM_VSOCK_CONN=acond.vsock_conn"
 }
 
-func prepareEnvTcp(connTarget string) []string {
-	return []string{
-		fmt.Sprintf("ATD_TCPFWD=%v:1025", connTarget)}
+func prepareEnvTcp(connTarget string) string {
+	env := os.Getenv("ATD_TCPFWD")
+	if env == "" {
+		return fmt.Sprintf("ATD_TCPFWD=%v:1025", connTarget)
+	} else {
+		return fmt.Sprintf("ATD_TCPFWD=%v,%v:1025", env, connTarget)
+	}
 }
 
 func run(args []string) error {
@@ -200,11 +203,21 @@ func run(args []string) error {
 		if !strings.HasPrefix(vmConnTarget, ":") {
 			cid := os.Getenv("ATD_CID")
 			vsock_env := prepareEnvVsock()
-			env = append(env, vsock_env...)
+			env = append(env, vsock_env)
 			vmConnTarget = fmt.Sprintf("vsock://%v:%v", cid, vmConnTarget)
 		} else {
 			tcp_env := prepareEnvTcp(string(vmConnTarget[1:]))
-			env = append(env, tcp_env...)
+			tcpfwdFound := false
+			for i, e := range env {
+				if strings.HasPrefix(e, "ATD_TCPFWD") {
+					env[i] = tcp_env
+					tcpfwdFound = true
+					break
+				}
+			}
+			if !tcpfwdFound {
+				env = append(env, tcp_env)
+			}
 			vmConnTarget = fmt.Sprintf("tcp://%v", vmConnTarget)
 		}
 		env = append(env,
