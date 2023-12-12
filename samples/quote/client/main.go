@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"aconcli/attest"
@@ -93,13 +94,14 @@ func main() {
 		return
 	}
 
-	if err := attest.WriteQuote(quote); err != nil {
+	if err := attest.WriteQuote("quote.bin", quote); err != nil {
 		fmt.Fprintf(os.Stderr, "write out quote binary data error: %v\n", err)
 		return
 	}
 
 	// verify quote using existing application from DCAP quote verify library
-	ok, err := attest.VerifyQuote("./quote.bin")
+	verifierPath := filepath.Dir(os.Args[0]) + "/app"
+	ok, err := attest.VerifyQuote(verifierPath, "./quote.bin")
 	if !ok {
 		fmt.Fprintf(os.Stderr, "verify quote failed, error: %v\n", err)
 		return

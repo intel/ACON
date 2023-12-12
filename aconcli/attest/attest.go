@@ -148,8 +148,8 @@ func ParseAttestData(data []byte) (*AttestData, error) {
 	return attestData, nil
 }
 
-func WriteQuote(quote []byte) error {
-	f, err := os.Create("quote.bin")
+func WriteQuote(filename string, quote []byte) error {
+	f, err := os.Create(filename)
 	if err != nil {
 		return err
 	}
@@ -159,8 +159,8 @@ func WriteQuote(quote []byte) error {
 	return err
 }
 
-func VerifyQuote(path string) (bool, error) {
-	cmd := exec.Command("./app", "-quote", path)
+func VerifyQuote(verifier, quote string) (bool, error) {
+	cmd := exec.Command(verifier, "-quote", quote)
 	if err := cmd.Run(); err != nil {
 		return false, err
 	} else {
