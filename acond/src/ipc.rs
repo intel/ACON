@@ -97,7 +97,7 @@ impl AconService {
                 },
             )),
         )?;
-        let mut rtmr_log = "\0\0\0".to_string(); // log of 0-2 is dismissed.
+        let mut rtmr_log = "\0\0\0\0\0\0".to_string(); // log of 0-2 is dismissed.
         let rtmr_log3 = utils::get_measurement_rtmr3()?;
         for l in rtmr_log3.iter() {
             rtmr_log.push_str(l);
