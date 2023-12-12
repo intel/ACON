@@ -68,6 +68,13 @@ lazy_static! {
             flags: MsFlags::MS_NOSUID | MsFlags::MS_NODEV,
             option: Some("mode=1777")
         },
+        RootMount {
+            source: None,
+            target: "run",
+            fstype: Some("tmpfs"),
+            flags: MsFlags::MS_NOSUID | MsFlags::MS_NODEV,
+            option: Some("mode=755")
+        },
     ];
 }
 
@@ -416,16 +423,6 @@ fn run_child(fork_args: &ForkArgs, slave: Option<i32>, csock: i32) -> Result<Pid
         )?;
 
         unistd::chdir(&rootfs)?;
-        for (key, value) in config_args.uids.iter() {
-            let path = Path::new("run/user").join(format!("{}", key));
-            fs::create_dir_all(&path)?;
-            unistd::chown(
-                &path,
-                Some(Uid::from_raw(*value)),
-                Some(Gid::from_raw(*value)),
-            )?;
-        }
-
         if config_args.writable_fs {
             for entry in walkdir::WalkDir::new("./") {
                 let path = entry?.into_path();
@@ -466,6 +463,13 @@ fn run_child(fork_args: &ForkArgs, slave: Option<i32>, csock: i32) -> Result<Pid
 
         for m in ROOTFS_MOUNTS.iter() {
             mount::mount(m.source, m.target, m.fstype, m.flags, m.option)?;
+        }
+
+        let config_args = fork_args.config_args.as_ref().unwrap();
+        for (key, _) in config_args.uids.iter() {
+            let path = Path::new("run/user").join(format!("{}", key));
+            fs::create_dir_all(&path)?;
+            unistd::chown(&path, Some(Uid::from_raw(*key)), Some(Gid::from_raw(*key)))?;
         }
     }
 
