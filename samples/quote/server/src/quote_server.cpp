@@ -1,3 +1,6 @@
+// Copyright © 2023 Intel Corporation
+// SPDX-License-Identifier: Apache-2.0
+
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <netinet/in.h>
