@@ -1,0 +1,26 @@
+name: CICD-Nginx
+
+on:
+  push:
+    branches: [ "main" ]
+    paths-ignore:
+      - 'doc/**'
+  pull_request:
+    branches: [ "main" ]
+    paths-ignore:
+      - 'doc/**'
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  CICD:
+
+    runs-on: self-hosted
+    name: CICD-Nginx
+    steps:
+    - uses: actions/checkout@v3
+    - name: Enable Nginx docker
+      run: |
+        source scripts/start-happypath.sh
+        run_workload -d test -i acon_nginx -f nginx.dockerfile -j '.uids+=[101] | .writableFS=true | .entrypoint+=["nginx", "-g", "daemon off;"]'
