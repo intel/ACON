@@ -30,6 +30,7 @@ var (
 	timetolive   int
 	startfile    string
 	vmConnTarget string
+	finalize     bool
 )
 
 var runCmd = &cobra.Command{
@@ -115,6 +116,15 @@ func loadBundle(client *service.AconClient, r *repo.Repo, b *repo.Bundle, needSt
 			log.Fatalf("Failed, AddBlob %s: %v", layer, err)
 		} else {
 			log.Printf("Added File System Layer: %s\n", layer)
+		}
+	}
+
+	if finalize {
+		err = service.Finalize(client)
+		if err != nil {
+			log.Fatalf("Failed, Finalize: %v", err)
+		} else {
+			log.Printf("Finalized to load images\n")
 		}
 	}
 
@@ -296,4 +306,7 @@ func init() {
 
 	runCmd.Flags().StringSliceVar(&env, "env", nil,
 		"set environment variables inside new containers")
+
+	runCmd.Flags().BoolVar(&finalize, "finalize", true,
+		"finalize the process of loading images to ACON TD/VM")
 }
