@@ -86,7 +86,7 @@ public:
 
         if (msg_hdr.command < 0)
         {
-            cerr << "Err: " << msg_buf.get() + sizeof(acon_message_err_t) << ".(acond)" << endl;
+            //cerr << "Err: " << msg_buf.get() + sizeof(acon_message_err_t) << ".(acond)" << endl;
             return NULL;
         }
 
@@ -214,8 +214,16 @@ int main(int argc, char *argv[])
             exit(EXIT_FAILURE);
         }
 
-        size_t data_size;
+        size_t data_size = 0;
         auto data = get_quote(&data_size);
+        if (data_size == 0)
+        {
+            cerr << "Err: Can't get quote from a Non-TD environment." << endl;
+        }
+        else
+        {
+            cout << "Received quote from a TD environment." << endl;
+        }
         ssize_t ret = send(sock_fd, data.get(), data_size, 0);
 
         close(sock_fd);
