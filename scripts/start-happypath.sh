@@ -146,6 +146,12 @@ run_workload() {
         return 2
     }
 
+    log_note "Get TDVM status"
+    ./aconcli status
+    output=$(./aconcli status)
+    instance_id=$(echo "$output" | awk '/Instance ID:/ {print $4}')
+    kill $instance_id
+
     log_note "run TDVM"
     ATD_BIOS=OVMF.fd ATD_KERNEL=kernel.img ATD_RD=initrd.img ./aconcli run -n "$docker_id.json" -c :5532 -f "$acon_root/scripts/acon-startvm" || {
         log_error "Run TDVM error will stop ACON instances"
