@@ -5,20 +5,16 @@ use crate::{image::AttestDataValue, io as acond_io, pod::Pod, report, utils};
 use anyhow::{anyhow, Result};
 use std::{
     fs::{self, Permissions},
-    marker::PhantomData,
     mem,
     os::unix::prelude::PermissionsExt,
     path::Path,
-    str,
+    ptr, str,
     sync::Arc,
 };
 use tokio::{
     net::{UnixListener, UnixStream},
     sync::{mpsc, oneshot, watch, RwLock},
 };
-
-#[repr(C)]
-pub struct __IncompleteArrayField<T>(PhantomData<T>, [T; 0]);
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -39,7 +35,6 @@ struct AconGetReportReq {
     request_type: u32,      // 0 is report and 1 is quote
     nonce: [u64; 2],
     attest_data_type: i32, // 0 = no data; 1 = binary; 2 = string; others = reserved
-    attest_data: __IncompleteArrayField<u8>,
 }
 
 #[repr(C)]
@@ -54,7 +49,6 @@ struct AconGetReportRsp {
 struct AconSetAttestationDataReq {
     header: AconMessageHdr, // command = 2
     attest_data_type: i32,  // Same definition as AconGetReportReq.attest_data_type
-    attest_data: __IncompleteArrayField<u8>,
 }
 
 #[repr(C)]
@@ -212,14 +206,17 @@ async fn monitor_request(pod: Arc<RwLock<Pod>>, mut rx: mpsc::Receiver<Request>)
 async fn dispatch_request(request: &Request, service: &AconService) -> Result<Vec<u8>> {
     match request.command {
         0 => {
-            let (_, get_report_req, _) = unsafe { request.bytes.align_to::<AconGetReportReq>() };
+            let get_report_req: AconGetReportReq =
+                unsafe { ptr::read(request.bytes.as_ptr() as *const _) };
             match service
                 .get_report(
                     request.uid,
-                    get_report_req[0].request_type,
-                    get_report_req[0].nonce,
-                    get_report_req[0].attest_data_type,
-                    unsafe { bytes_to_string(&get_report_req[0].attest_data.1) },
+                    get_report_req.request_type,
+                    get_report_req.nonce,
+                    get_report_req.attest_data_type,
+                    unsafe {
+                        bytes_to_string(&request.bytes[mem::size_of::<AconGetReportReq>()..])
+                    },
                 )
                 .await
             {
@@ -254,14 +251,18 @@ async fn dispatch_request(request: &Request, service: &AconService) -> Result<Ve
         }
 
         2 => {
-            let (_, set_attestation_data_req, _) =
-                unsafe { request.bytes.align_to::<AconSetAttestationDataReq>() };
+            let set_attestation_data_req: AconSetAttestationDataReq =
+                unsafe { ptr::read(request.bytes.as_ptr() as *const _) };
 
             match service
                 .set_attestation_data(
                     request.uid,
-                    set_attestation_data_req[0].attest_data_type,
-                    unsafe { bytes_to_string(&set_attestation_data_req[0].attest_data.1) },
+                    set_attestation_data_req.attest_data_type,
+                    unsafe {
+                        bytes_to_string(
+                            &request.bytes[mem::size_of::<AconSetAttestationDataReq>()..],
+                        )
+                    },
                 )
                 .await
             {
