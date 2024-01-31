@@ -44,7 +44,7 @@ CMD="${ATD_QEMU:=qemu-kvm} -nographic                                   \
 
 dump_env    \
     ATD         "launch ${ATD:+td-}${ATD:-vm}"          \
-    ATD_QGS     "Location of QGS"                       \
+    ATD_QGS     "location of QGS"                       \
     ATD_QEMU    "QEMU executable"                       \
     ATD_CID     "VSOCK CID"                             \
     ATD_MEMSZ   "memory size"                           \

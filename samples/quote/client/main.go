@@ -183,7 +183,7 @@ func main() {
 	}
 	if !finalizedlogFound {
 		Failed()
-		fmt.Printf("\t%sERROR%s\tRTMR log are not finalized\n", Red, NoColor)
+		fmt.Printf("\t%sERROR%s\tACON TD is not finalized\n", Red, NoColor)
 		return
 	}
 	Passed()

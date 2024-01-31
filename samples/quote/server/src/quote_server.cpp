@@ -215,7 +215,7 @@ int main(int argc, char *argv[])
 
     // This sleep helps avoid intertwining our stdout with aconcli's
     this_thread::sleep_for(200ms);
-    cout << INFO "Server listening at PORT " << ntohs(serv_addr.sin_port) << endl;
+    cout << INFO "Server listening on PORT " << ntohs(serv_addr.sin_port) << endl;
 
     while (1)
     {
