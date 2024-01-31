@@ -9,8 +9,8 @@ SERVER  ?= sampleserver
 
 all: server.json client/sampleclient
 
-server.json: server/Dockerfile signer.pem signer.cer | .acon/
-	$(DOCKER) build -t $(SERVER) -f $< $(PWD)/../..
+server.json: server/Dockerfile $(wildcard server/src/*cpp) signer.pem signer.cer | .acon/
+	$(DOCKER) build -t $(SERVER) -f $< --build-arg https_proxy $(PWD)/../..
 	$(ACONCLI) generate -i $(SERVER) $@
 	$(ACONCLI) sign -k signer.pem -c signer.cer $@
 
@@ -26,9 +26,11 @@ client/sampleclient:
 .acon/:
 	$(ACONCLI) init
 
-clean:
+clean-server:
 	rm -rf .acon/ *.json *.pem *.cer
-	$(GO) -C client $@
 	$(DOCKER) rmi -f $(SERVER)
 
-.PHONY: all clean
+clean: clean-server
+	$(GO) -C client $@
+
+.PHONY: all clean-server clean
