@@ -31,14 +31,13 @@ ACON containers running in them.
 }
 
 func restart(args []string) error {
-	c, err := service.NewAconConnection(vmConnTarget)
+	c, err := service.NewAconHttpConnection(vmConnTarget, true)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Restart: cannot connect to %s: %v\n", vmConnTarget, err)
 		return err
 	}
-	defer c.Close()
 
-	err = service.Restart(c, cid, timeout)
+	err = c.Restart(cid, timeout)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Restart: cannot call 'restart' service: %v\n", err)
 		return err

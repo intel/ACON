@@ -430,13 +430,9 @@ func (r *Repo) BundleChain(mfile string) ([]*Bundle, error) {
 	return result, nil
 }
 
-func (r *Repo) BlobData(blob string) ([]byte, error) {
+func (r *Repo) BlobPath(blob string) string {
 	blobpath := filepath.Join(r.path, config.BlobDirName, blob+config.BlobExtension)
-	content, err := os.ReadFile(filepath.Clean(blobpath))
-	if err != nil {
-		return nil, fmt.Errorf("blob data: cannot read blob file %s: %v", blobpath, err)
-	}
-	return content, nil
+	return filepath.Clean(blobpath)
 }
 
 func (r *Repo) AllBundles() ([]*Bundle, error) {

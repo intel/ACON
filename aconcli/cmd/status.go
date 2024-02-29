@@ -33,13 +33,12 @@ them.
 }
 
 func getAllStatus(target string) ([]service.AconStatus, error) {
-	c, err := service.NewAconConnection(target)
+	c, err := service.NewAconHttpConnection(target, true)
 	if err != nil {
 		return nil, err
 	}
-	defer c.Close()
 
-	r, err := service.Inspect(c, 0)
+	r, err := c.Inspect(0)
 	if err != nil {
 		return nil, err
 	}

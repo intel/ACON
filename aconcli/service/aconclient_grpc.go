@@ -1,11 +1,11 @@
-// Copyright © 2023 Intel Corporation
-// SPDX-License-Identifier: Apache-2.0
-
 package service
 
 import (
 	"context"
+	"encoding/json"
 	"log"
+	"os"
+	"path/filepath"
 	"time"
 
 	nc "aconcli/netconn"
@@ -14,48 +14,63 @@ import (
 	emptypb "google.golang.org/protobuf/types/known/emptypb"
 )
 
-type AconClient struct {
-	pb.AconServiceClient
-	conn *grpc.ClientConn
-}
-
-func (c *AconClient) Close() error {
-	return c.conn.Close()
-}
-
-type AconStatus struct {
-	ContainerId uint32
-	State       uint32
-	Wstatus     int32
-	ImageId     string
-	ExePath     string
-}
-
 const (
 	defaultServiceTimeout = 10 * time.Second
 )
 
+type AconClientGrpc struct {
+	pb.AconServiceClient
+	conn *grpc.ClientConn
+}
+
 // caller's responsibility to call Close() on the returned AconClient
 // after using the agent services
-func NewAconConnection(targetConn string) (*AconClient, error) {
+func NewAconGrpcConnection(targetConn string) (*AconClientGrpc, error) {
 	log.Println("Service: Connecting", targetConn)
 	conn, err := nc.NewConnection(targetConn)
 	if err != nil {
 		return nil, err
 	}
 	log.Println("Service: Connected")
-	return &AconClient{
+	return &AconClientGrpc{
 		AconServiceClient: pb.NewAconServiceClient(conn),
 		conn:              conn,
 	}, nil
 }
 
-func AddManifest(sc pb.AconServiceClient, manifest string, sig, cert []byte) (string, []string, error) {
+func (c *AconClientGrpc) Close() error {
+	return c.conn.Close()
+}
+
+func (c *AconClientGrpc) AddManifest(manifestPath, sigPath, certPath string) (string, []string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), defaultServiceTimeout)
 	defer cancel()
 
-	r, err := sc.AddManifest(ctx,
-		&pb.AddManifestRequest{Manifest: manifest,
+	aconJSON, err := os.ReadFile(manifestPath)
+	if err != nil {
+		return "", nil, err
+	}
+
+	var v interface{}
+	if err := json.Unmarshal(aconJSON, &v); err != nil {
+		return "", nil, err
+	}
+	aconJSON, err = json.Marshal(v)
+	if err != nil {
+		return "", nil, err
+	}
+
+	sig, err := os.ReadFile(sigPath)
+	if err != nil {
+		return "", nil, err
+	}
+
+	cert, err := os.ReadFile(certPath)
+	if err != nil {
+		return "", nil, err
+	}
+	r, err := c.AconServiceClient.AddManifest(ctx,
+		&pb.AddManifestRequest{Manifest: string(aconJSON),
 			Signature:   sig,
 			Certificate: cert,
 		})
@@ -65,51 +80,56 @@ func AddManifest(sc pb.AconServiceClient, manifest string, sig, cert []byte) (st
 	return r.GetImageId(), r.GetMissingLayers(), nil
 }
 
-func AddBlob(sc pb.AconServiceClient, alg uint32, data []byte) error {
+func (c *AconClientGrpc) AddBlob(alg uint32, blobpath string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), defaultServiceTimeout)
 	defer cancel()
 
-	_, err := sc.AddBlob(ctx, &pb.AddBlobRequest{Alg: alg, Data: data})
+	content, err := os.ReadFile(filepath.Clean(blobpath))
+	if err != nil {
+		return err
+	}
+	_, err = c.AconServiceClient.AddBlob(ctx, &pb.AddBlobRequest{Alg: alg, Data: content})
 	return err
 }
 
-func Finalize(sc pb.AconServiceClient) error {
+func (c *AconClientGrpc) Finalize() error {
 	ctx, cancel := context.WithTimeout(context.Background(), defaultServiceTimeout)
 	defer cancel()
 
-	_, err := sc.Finalize(ctx, &emptypb.Empty{})
+	_, err := c.AconServiceClient.Finalize(ctx, &emptypb.Empty{})
 	return err
 }
 
-func Start(sc pb.AconServiceClient, imageId string, env []string) (uint32, error) {
+func (c *AconClientGrpc) Start(imageId string, env []string) (uint32, error) {
+>>>>>>> 71a1bce... refactored to acon interface:aconcli/service/aconclient_grpc.go
 	ctx, cancel := context.WithTimeout(context.Background(), defaultServiceTimeout)
 	defer cancel()
 
-	r, err := sc.Start(ctx, &pb.StartRequest{ImageId: imageId, Envs: env})
+	r, err := c.AconServiceClient.Start(ctx, &pb.StartRequest{ImageId: imageId, Envs: env})
 	if err != nil {
 		return 0, err
 	}
 	return r.GetContainerId(), nil
 }
 
-func Kill(sc pb.AconServiceClient, cid uint32, signum int32) error {
+func (c *AconClientGrpc) Kill(cid uint32, signum int32) error {
 	ctx, cancel := context.WithTimeout(context.Background(), defaultServiceTimeout)
 	defer cancel()
 
-	_, err := sc.Kill(ctx, &pb.KillRequest{ContainerId: cid, SignalNum: signum})
+	_, err := c.AconServiceClient.Kill(ctx, &pb.KillRequest{ContainerId: cid, SignalNum: signum})
 	return err
 }
 
-func Restart(sc pb.AconServiceClient, cid uint32, timeout uint64) error {
+func (c *AconClientGrpc) Restart(cid uint32, timeout uint64) error {
 	ctx, cancel := context.WithTimeout(context.Background(), defaultServiceTimeout+time.Duration(timeout)*time.Second)
 	defer cancel()
 
-	_, err := sc.Restart(ctx, &pb.RestartRequest{ContainerId: cid, Timeout: timeout})
+	_, err := c.AconServiceClient.Restart(ctx, &pb.RestartRequest{ContainerId: cid, Timeout: timeout})
 	return err
 }
 
-func Invoke(sc pb.AconServiceClient, cid uint32, invocation []string,
-	timeout uint64, env []string, data []byte, capture_size uint64) ([]byte, []byte, error) {
+func (c *AconClientGrpc) Invoke(cid uint32, invocation []string,
+	timeout uint64, env []string, datafile string, capture_size uint64) ([]byte, []byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), defaultServiceTimeout+time.Duration(timeout)*time.Second)
 	defer cancel()
 
@@ -119,7 +139,16 @@ func Invoke(sc pb.AconServiceClient, cid uint32, invocation []string,
 		args = invocation[1:]
 	}
 
-	r, err := sc.Exec(ctx, &pb.ExecRequest{
+	var data []byte
+	if datafile != "" {
+		d, err := os.ReadFile(filepath.Clean(datafile))
+		if err != nil {
+			return nil, nil, err
+		}
+		data = d
+	}
+
+	r, err := c.AconServiceClient.Exec(ctx, &pb.ExecRequest{
 		ContainerId: cid,
 		Command:     cmd,
 		Timeout:     timeout,
@@ -133,11 +162,11 @@ func Invoke(sc pb.AconServiceClient, cid uint32, invocation []string,
 	return r.GetStdout(), r.GetStderr(), nil
 }
 
-func Inspect(sc pb.AconServiceClient, cid uint32) ([]AconStatus, error) {
+func (c *AconClientGrpc) Inspect(cid uint32) ([]AconStatus, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), defaultServiceTimeout)
 	defer cancel()
 
-	r, err := sc.Inspect(ctx, &pb.InspectRequest{ContainerId: cid})
+	r, err := c.AconServiceClient.Inspect(ctx, &pb.InspectRequest{ContainerId: cid})
 	if err != nil {
 		return nil, err
 	}
@@ -156,12 +185,12 @@ func Inspect(sc pb.AconServiceClient, cid uint32) ([]AconStatus, error) {
 	return result, nil
 }
 
-func Report(sc pb.AconServiceClient, nonceLo, nonceHi uint64, requestType uint32) (data []byte,
+func (c *AconClientGrpc) Report(nonceLo, nonceHi uint64, requestType uint32) (data []byte,
 	mrlog0 []string, mrlog1 []string, mrlog2 []string, mrlog3 []string, attest_data string, e error) {
 	ctx, cancel := context.WithTimeout(context.Background(), defaultServiceTimeout)
 	defer cancel()
 
-	r, err := sc.Report(ctx, &pb.ReportRequest{NonceLo: nonceLo, NonceHi: nonceHi, RequestType: requestType})
+	r, err := c.AconServiceClient.Report(ctx, &pb.ReportRequest{NonceLo: nonceLo, NonceHi: nonceHi, RequestType: requestType})
 	if err != nil {
 		e = err
 		return

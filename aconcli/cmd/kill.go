@@ -40,14 +40,13 @@ func kill(args []string) error {
 		fmt.Fprintf(os.Stderr, "Kill: cannot get signal number from %s: %v\n", args[0], err)
 		return err
 	}
-	c, err := service.NewAconConnection(vmConnTarget)
+	c, err := service.NewAconHttpConnection(vmConnTarget, true)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Kill: cannot connect to %s: %v\n", vmConnTarget, err)
 		return err
 	}
-	defer c.Close()
 
-	err = service.Kill(c, cid, int32(signum))
+	err = c.Kill(cid, int32(signum))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Kill: cannot call 'kill' service: %v\n", err)
 		return err

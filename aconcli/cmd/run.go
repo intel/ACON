@@ -65,29 +65,9 @@ debugging.
 	},
 }
 
-func loadBundle(client *service.AconClient, r *repo.Repo, b *repo.Bundle, needStart bool, env []string) error {
-	aconJSON, err := os.ReadFile(b.Manifest())
-	if err != nil {
-		return err
-	}
-
-	aconJSON, err = canonicalJson(aconJSON)
-	if err != nil {
-		return err
-	}
-
-	sig, err := os.ReadFile(b.Sig())
-	if err != nil {
-		return err
-	}
-
-	cert, err := os.ReadFile(b.Cert())
-	if err != nil {
-		return err
-	}
-
+func loadBundle(client service.AconClient, r *repo.Repo, b *repo.Bundle, needStart bool, env []string) error {
 	// AddManifest
-	bundleId, layers, err := service.AddManifest(client, string(aconJSON), sig, cert)
+	bundleId, layers, err := client.AddManifest(b.Manifest(), b.Sig(), b.Cert())
 	if err != nil {
 		return fmt.Errorf("AddManifest: %v", err)
 	}
@@ -106,12 +86,8 @@ func loadBundle(client *service.AconClient, r *repo.Repo, b *repo.Bundle, needSt
 	}
 
 	for _, layer := range layers {
-		data, err := r.BlobData(layer)
-		if err != nil {
-			log.Fatalf("cannot get blob data for %s: %v", layer, err)
-		}
-
-		err = service.AddBlob(client, 2, data)
+		blobpath := r.BlobPath(layer)
+		err = client.AddBlob(2, blobpath)
 		if err != nil {
 			log.Fatalf("Failed, AddBlob %s: %v", layer, err)
 		} else {
@@ -120,7 +96,7 @@ func loadBundle(client *service.AconClient, r *repo.Repo, b *repo.Bundle, needSt
 	}
 
 	if finalize {
-		err = service.Finalize(client)
+		err = client.Finalize()
 		if err != nil {
 			log.Fatalf("Failed, Finalize: %v", err)
 		} else {
@@ -129,7 +105,7 @@ func loadBundle(client *service.AconClient, r *repo.Repo, b *repo.Bundle, needSt
 	}
 
 	if needStart {
-		aconId, err := service.Start(client, bundleId, env)
+		aconId, err := client.Start(bundleId, env)
 		if err != nil {
 			return fmt.Errorf("loadBundle: fail to start bundle: %v", err)
 		}
@@ -150,7 +126,7 @@ func equalBundleList(x, y []*repo.Bundle) bool {
 	return true
 }
 
-func loadAll(c *service.AconClient, r *repo.Repo,
+func loadAll(c service.AconClient, r *repo.Repo,
 	bundles []*repo.Bundle, needstart bool, env []string) error {
 	num := len(bundles)
 	if num == 0 {
@@ -174,8 +150,8 @@ func loadAll(c *service.AconClient, r *repo.Repo,
 }
 
 // caller needs to close the connection
-func connect(conn string) (*service.AconClient, error) {
-	return service.NewAconConnection(conn)
+func connect(conn string) (*service.AconClientHttp, error) {
+	return service.NewAconHttpConnection(conn, true)
 }
 
 func prepareEnvVsock() string {
@@ -247,7 +223,6 @@ func run(args []string) error {
 			fmt.Fprintf(os.Stderr, "Run: cannot connect to %s: %v\n", vmConnTarget, err)
 			return err
 		}
-		defer c.Close()
 
 		var bundles []*repo.Bundle
 		if len(manifests) > 0 {

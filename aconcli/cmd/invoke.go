@@ -5,7 +5,6 @@ package cmd
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 
 	"aconcli/config"
 	"aconcli/service"
@@ -39,23 +38,13 @@ capital letter.
 }
 
 func invoke(args []string) error {
-	c, err := service.NewAconConnection(vmConnTarget)
+	c, err := service.NewAconHttpConnection(vmConnTarget, true)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Invoke: cannot connect to %s: %v\n", vmConnTarget, err)
 		return err
 	}
-	defer c.Close()
 
-	var data []byte
-	if inputfile != "" {
-		data, err = os.ReadFile(filepath.Clean(inputfile))
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Invokd: cannot read input file %s: %v\n", inputfile, err)
-			return err
-		}
-	}
-
-	stdout, stderr, err := service.Invoke(c, cid, args, timeout, env, data, sizeToCapture)
+	stdout, stderr, err := c.Invoke(cid, args, timeout, env, inputfile, sizeToCapture)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Invoke: cannot call 'invoke' service: %v\n", err)
 		return err
