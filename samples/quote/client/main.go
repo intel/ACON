@@ -5,6 +5,7 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha512"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
@@ -170,6 +171,19 @@ func main() {
 	} else {
 		Passed()
 		//fmt.Fprintf(os.Stderr, "RTMR value: %v\n", mr)
+	}
+
+	// check whether evaluated reportdata and the value from quote match
+	Doing("Verifying ReportData")
+	rd := sha512.Sum384(attestData)
+	rdHex := hex.EncodeToString(rd[:])
+	rdFromQuote := quoteStruct.ReportBody.ReportData
+	rdFromQuoteHex := hex.EncodeToString(rdFromQuote.D[:sha512.Size384])
+	if rdHex != rdFromQuoteHex {
+		Failed()
+		return
+	} else {
+		Passed()
 	}
 
 	// check whether there exists a 'Finalized' log entry
