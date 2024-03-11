@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"aconcli/attest"
 )
@@ -25,27 +26,57 @@ const (
 	RtmrLog3
 )
 
+const (
+	FinalizedLogEntry = "github.com/intel/ACON Finalize"
+	Green             = "\033[0;32m"
+	Red               = "\033[0;31m"
+	Bold              = "\033[1m"
+	NoColor           = "\033[0m"
+)
+
 type QuoteHeader struct {
 	RtmrLogOffset uint32
 	AttestOffset  uint32
 	DataOffset    uint32
 }
 
+func Doing(what string) {
+	fmt.Printf("    %-60s", what+"...")
+	time.Sleep(200 * time.Millisecond)
+}
+
+func Ok() {
+	fmt.Println(Green + "Ok" + NoColor)
+}
+
+func Failed() {
+	fmt.Println(Red + "Failed" + NoColor)
+}
+
+func Passed() {
+	fmt.Println(Green + "Passed" + NoColor)
+}
+
 func dumpAttestInfo(a *attest.AttestData) {
-	fmt.Fprintf(os.Stdout, "api version: %v\n", a.ApiVersion)
-	fmt.Fprintf(os.Stdout, "requestor nonce: %v\n", a.RequestorNonce)
-	fmt.Fprintf(os.Stdout, "acond nonce: %v\n", a.AcondNonce)
+	//fmt.Fprintf(os.Stdout, "api version: %v\n", a.ApiVersion)
+	//fmt.Fprintf(os.Stdout, "requestor nonce: %v\n", a.RequestorNonce)
+	//fmt.Fprintf(os.Stdout, "acond nonce: %v\n", a.AcondNonce)
 	for imageId, cInfo := range a.AttestationData {
-		fmt.Fprintf(os.Stdout, "ACON image ID: %v\n", imageId)
+		fmt.Printf(Bold+"\tIMAGE"+NoColor+" -- %v\n", imageId[:18])
 		for i, v := range cInfo {
-			fmt.Fprintf(os.Stdout, "\tcontainer ID: %v\n", i)
-			fmt.Fprintf(os.Stdout, "\tattestation data: %v\n", v.Data)
+			fmt.Printf(Bold+"\t    ContainerID"+NoColor+"\t%v\n", i)
+			fmt.Printf(Bold+"\t    Data"+NoColor+"\t%v\n", v.Data)
 		}
 	}
 }
 
 func main() {
-	conn, err := net.Dial("tcp", "localhost:8080")
+	if len(os.Args) != 2 {
+		fmt.Fprintf(os.Stderr, "usage: %v PORT\n", os.Args[0])
+		return
+	}
+
+	conn, err := net.Dial("tcp", "localhost:"+os.Args[1])
 	if err != nil {
 		fmt.Println("connect error:", err)
 		return
@@ -53,6 +84,8 @@ func main() {
 	defer conn.Close()
 
 	// get data from sample server
+	Doing("Requesting quote from server")
+
 	var data []byte
 	buf := make([]byte, 1024)
 	length := 0
@@ -60,7 +93,7 @@ func main() {
 		n, err := conn.Read(buf)
 		if err != nil {
 			if err != io.EOF {
-				fmt.Fprintf(os.Stderr, "read quote error: %v\n", err)
+				Failed()
 				return
 			}
 			break
@@ -68,12 +101,15 @@ func main() {
 		data = append(data, buf[:n]...)
 		length += n
 	}
+	Ok()
 
 	// parse quote, log and attestation data
+	Doing("Parsing quote")
+
 	header := new(QuoteHeader)
 	err = binary.Read(bytes.NewReader(data), binary.LittleEndian, header)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "parse quote header error: %v\n", err)
+		Failed()
 		return
 	}
 
@@ -83,9 +119,11 @@ func main() {
 
 	quoteStruct, err := attest.ParseQuote(quote)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "parse quote error: %v\n", err)
+		Failed()
 		return
 	}
+	Ok()
+
 	q, err := json.MarshalIndent(quoteStruct, "", "    ")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "marshal quote to json error: %v\n", err)
@@ -103,37 +141,62 @@ func main() {
 	}
 
 	// verify quote using existing application from DCAP quote verify library
+	Doing("Verifying quote")
+
 	verifierPath := filepath.Dir(os.Args[0]) + "/app"
 	ok, err := attest.VerifyQuote(verifierPath, "./quote.bin")
 	if !ok {
-		fmt.Fprintf(os.Stderr, "verify quote failed, error: %v\n", err)
+		Failed()
 		return
 	} else {
-		fmt.Fprintf(os.Stdout, "verify quote successfully\n")
+		Ok()
 	}
 
-	// dislay attestation related information
-	a, err := attest.ParseAttestData(attestData)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "parse attest data error: %v\n", err)
-		return
-	}
-	dumpAttestInfo(a)
-
-	// check whether evaluated rtmr value and rtmr value from quote match
+	Doing("Parsing RTMR activity log")
 	logs := strings.Split(string(rtmrLog[RtmrLog3:]), "\x00")
 	logs = logs[:len(logs)-1]
+	Ok()
+
+	// check whether evaluated rtmr value and rtmr value from quote match
+	Doing("Verifying RTMR activity log")
 	mr := hex.EncodeToString(attest.GetRtmrValue(logs))
 	r3 := quoteStruct.ReportBody.Rtmr[RtmrLog3]
 	mrFromQuote := hex.EncodeToString(r3.M[:])
 	if mr != mrFromQuote {
-		fmt.Fprintf(os.Stderr, "Evaluated RTMR value and RTMR value from quote do not match\n")
-		fmt.Fprintf(os.Stderr, "Evaluated: %v\n", mr)
-		fmt.Fprintf(os.Stderr, "From quote: %v\n", mrFromQuote)
+		Failed()
+		//fmt.Fprintf(os.Stderr, "Evaluated: %v\n", mr)
+		//fmt.Fprintf(os.Stderr, "From quote: %v\n", mrFromQuote)
 		return
 	} else {
-		fmt.Fprintf(os.Stderr, "Evaluated RTMR value and RTMR value from quote match\n")
-		fmt.Fprintf(os.Stderr, "RTMR value: %v\n", mr)
+		Passed()
+		//fmt.Fprintf(os.Stderr, "RTMR value: %v\n", mr)
+	}
+
+	// check whether there exists a 'Finalized' log entry
+	Doing("Checking RTMR log against security policy")
+	finalizedlogFound := false
+	for _, e := range logs {
+		if e == FinalizedLogEntry {
+			finalizedlogFound = true
+			break
+		}
+	}
+	if !finalizedlogFound {
+		Failed()
+		fmt.Printf("\t%sERROR%s\tACON TD is not finalized\n", Red, NoColor)
 		return
 	}
+	Passed()
+
+	// dislay attestation related information
+	Doing("Extracting attestation data")
+	a, err := attest.ParseAttestData(attestData)
+	if err != nil {
+		Failed()
+		return
+	}
+	Ok()
+
+	//fmt.Println(string(attestData[:]))
+	dumpAttestInfo(a)
 }
