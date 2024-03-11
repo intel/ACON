@@ -1,17 +1,8 @@
 // Copyright (C) 2023 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 
-mod grpc {
-    tonic::include_proto!("acon.grpc");
-}
-
 use anyhow::{anyhow, Result};
 use futures::future;
-use grpc::{
-    AddBlobRequest, AddManifestRequest, AddManifestResponse, ContainerInfo, ExecRequest,
-    ExecResponse, GetManifestRequest, GetManifestResponse, InspectRequest, InspectResponse,
-    KillRequest, MrLog, ReportRequest, ReportResponse, RestartRequest, StartRequest, StartResponse,
-};
 use nix::{
     errno::Errno,
     sys::{
@@ -330,8 +321,119 @@ fn format_error(err: AcondError) -> Vec<u8> {
     error
 }
 
-struct AconService {
-    pod: Arc<RwLock<Pod>>,
+#[derive(Serialize, Deserialize, Default)]
+pub struct AddManifestRequest {
+    pub manifest: Vec<u8>,
+    pub signature: Vec<u8>,
+    pub certificate: Vec<u8>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct AddManifestResponse {
+    pub image_id: String,
+    pub missing_layers: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct AddBlobRequest {
+    // 00000001 sha256
+    // 00000010 sha384
+    // 00000100 sha512
+    pub alg: u32,
+    pub data: Vec<u8>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct StartRequest {
+    pub image_id: String,
+    #[serde(default)]
+    pub envs: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct StartResponse {
+    pub container_id: u32,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct RestartRequest {
+    pub container_id: u32,
+    pub timeout: u64,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct ExecRequest {
+    pub container_id: u32,
+    pub command: String,
+    pub timeout: u64,
+    #[serde(default)]
+    pub arguments: Vec<String>,
+    #[serde(default)]
+    pub envs: Vec<String>,
+    #[serde(default)]
+    pub stdin: Vec<u8>,
+    pub capture_size: u64,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct ExecResponse {
+    pub stdout: Vec<u8>,
+    pub stderr: Vec<u8>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct KillRequest {
+    pub container_id: u32,
+    pub signal_num: i32,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct InspectRequest {
+    pub container_id: u32,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct InspectResponse {
+    pub info: Vec<ContainerInfo>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct ContainerInfo {
+    pub container_id: u32,
+    pub state: u32,
+    pub wstatus: i32,
+    pub image_id: String,
+    pub exe_path: String,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct ReportRequest {
+    pub nonce_lo: u64,
+    pub nonce_hi: u64,
+    pub request_type: u32, // 0 is report and 1 is quote
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct MrLog {
+    pub logs: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct ReportResponse {
+    pub data: Vec<u8>,
+    pub mrlog: HashMap<u32, MrLog>,
+    pub attestation_data: String,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct GetManifestRequest {
+    pub image_id: String,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct GetManifestResponse {
+    pub manifest: String,
+    pub certificate: Vec<u8>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -373,12 +475,16 @@ impl AcondError {
     }
 }
 
+struct AconService {
+    pod: Arc<RwLock<Pod>>,
+}
+
 impl AconService {
     async fn add_manifest(
         &self,
         request: &AddManifestRequest,
     ) -> Result<AddManifestResponse, AcondError> {
-        let manifest_bytes = request.manifest.as_bytes();
+        let manifest_bytes = request.manifest.as_slice();
         let signature_bytes = request.signature.as_slice();
         let signer_bytes = request.certificate.as_slice();
 
@@ -588,15 +694,13 @@ impl AconService {
         };
 
         if let Some(notifier) = exit_notifier {
-            loop {
-                tokio::select! {
-                    _ = time::sleep(Duration::from_secs(timeout)) => {
-                        return Err(AcondError::deadline_exceeded(
-                            utils::ERR_RPC_CONTAINER_RESTART_TIMEOUT,
-                        ));
-                    }
-                    _ = notifier.notified() => break,
+            tokio::select! {
+                _ = time::sleep(Duration::from_secs(timeout)) => {
+                    return Err(AcondError::deadline_exceeded(
+                        utils::ERR_RPC_CONTAINER_RESTART_TIMEOUT,
+                    ));
                 }
+                _ = notifier.notified() => {}
             }
         }
 

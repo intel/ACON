@@ -321,7 +321,7 @@ pub fn setup_container_dtree(image: &Image, container_id: u32) -> Result<String>
     let top_path = setup_top_dtree(&container_path)?;
 
     let root_path = Path::new(&container_path).join(ROOTFS_DIR);
-    fs::create_dir_all(&root_path)?;
+    fs::create_dir_all(root_path)?;
 
     let mut image_dirs: Vec<PathBuf> = vec![];
     let image_path = Path::new(&container_path).join(IMAGE_DIR).join(IMAGE_LAYER);
@@ -551,7 +551,7 @@ pub fn get_container_info(container_id: u32, container_pid: Pid) -> Result<(u32,
     let exe = link.strip_prefix(prefix)?;
 
     let reader = BufReader::new(File::open(format!("/proc/{}/status", container_pid))?);
-    for (_, l) in reader.lines().enumerate() {
+    for l in reader.lines() {
         let line = l?;
 
         if line.starts_with("Name:") {
@@ -603,7 +603,7 @@ pub fn is_init_process(pid: i32) -> Result<bool> {
     let file = File::open(format!("/proc/{}/status", pid))?;
     let reader = BufReader::new(file);
 
-    for (_, line) in reader.lines().enumerate() {
+    for line in reader.lines() {
         let line = match line {
             Ok(l) => l,
             Err(_) => {
@@ -706,6 +706,25 @@ pub fn generate_cid() -> Result<u32> {
     }
 
     Ok(CONTAINER_SERIES.fetch_add(1, Ordering::Relaxed) as u32)
+}
+
+pub fn parse_content_range(header: &str) -> Option<u64> {
+    let parts: Vec<&str> = header.split("bytes").collect();
+    if parts.len() != 2 {
+        return None;
+    }
+
+    let range_parts: Vec<&str> = parts[1].split('/').collect();
+    if range_parts.len() != 2 {
+        return None;
+    }
+
+    let range_bounds: Vec<&str> = range_parts[0].split('-').collect();
+    if range_bounds.len() != 2 {
+        return None;
+    }
+
+    range_bounds[0].trim().parse().ok()
 }
 
 #[cfg(test)]
