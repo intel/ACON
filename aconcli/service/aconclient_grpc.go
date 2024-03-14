@@ -101,7 +101,6 @@ func (c *AconClientGrpc) Finalize() error {
 }
 
 func (c *AconClientGrpc) Start(imageId string, env []string) (uint32, error) {
->>>>>>> 71a1bce... refactored to acon interface:aconcli/service/aconclient_grpc.go
 	ctx, cancel := context.WithTimeout(context.Background(), defaultServiceTimeout)
 	defer cancel()
 
