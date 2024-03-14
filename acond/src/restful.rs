@@ -18,6 +18,14 @@ use actix_web::{
 use anyhow::{anyhow, Result};
 use futures::{StreamExt, TryStreamExt};
 use nix::unistd;
+use openssl::{
+    asn1::Asn1Time,
+    hash::MessageDigest,
+    pkey::PKey,
+    rsa::Rsa,
+    ssl::{SslAcceptor, SslMethod},
+    x509::{extension::BasicConstraints, X509Builder, X509NameBuilder},
+};
 use serde::Deserialize;
 use std::{
     fmt, fs,
@@ -432,8 +440,36 @@ fn get_rest_error(buf: &[u8]) -> Result<RestError> {
     }
 }
 
-pub async fn run_server(stream: StdUnixStream) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn run_server(
+    stream: StdUnixStream,
+    port: u32,
+) -> Result<(), Box<dyn std::error::Error>> {
     let service = web::Data::new(ExchangeService::new(UnixStream::from_std(stream)?));
+
+    let rsa_key = Rsa::generate(3072)?;
+    let private_key = PKey::from_rsa(rsa_key)?;
+
+    let mut x509_builder = X509Builder::new()?;
+
+    let start_time = Asn1Time::days_from_now(0)?;
+    let end_time = Asn1Time::days_from_now(365)?;
+    x509_builder.set_not_before(&start_time)?;
+    x509_builder.set_not_after(&end_time)?;
+
+    let mut x509_name_builder = X509NameBuilder::new()?;
+    x509_name_builder.append_entry_by_text("CN", "localhost")?;
+    let subject_name = x509_name_builder.build();
+
+    x509_builder.set_subject_name(&subject_name)?;
+    x509_builder.set_issuer_name(&subject_name)?;
+    x509_builder.set_pubkey(&private_key)?;
+
+    let mut extension = BasicConstraints::new();
+    extension.ca();
+    x509_builder.append_extension(extension.build()?)?;
+
+    x509_builder.sign(&private_key, MessageDigest::sha384())?;
+    let x509 = x509_builder.build();
 
     HttpServer::new(move || {
         App::new()
@@ -450,9 +486,15 @@ pub async fn run_server(stream: StdUnixStream) -> Result<(), Box<dyn std::error:
             .route("/api/v1/container/exec", web::post().to(exec))
             .route("/api/v1/container/kill", web::post().to(kill))
             .route("/api/v1/container/inspect", web::get().to(inspect))
-            .route("/api/v1/container/report", web::get().to(report)) // why container report? report/quote use 2 urls?
+            .route("/api/v1/container/report", web::get().to(report))
     })
-    .bind("0.0.0.0:8080")?
+    .workers(10)
+    .bind_openssl(format!("0.0.0.0:{}", port), {
+        let mut builder = SslAcceptor::mozilla_intermediate(SslMethod::tls())?;
+        builder.set_private_key(&private_key)?;
+        builder.set_certificate(&x509)?;
+        builder
+    })?
     .run()
     .await?;
 

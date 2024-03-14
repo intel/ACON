@@ -13,7 +13,7 @@ prost = "0.11.2"
 tonic = "0.8.2"
 tokio = { version = "1.17.0", features = ["rt", "fs", "signal"] }
 tokio-vsock = "0.4.0"
-actix-web = "4.5.1"
+actix-web = { version = "4.5.1", features = ["openssl"] }
 actix-multipart = "0.6.1"
 futures = "0.3.21"
 prctl = "1.0.0"
@@ -31,6 +31,7 @@ scopeguard = "1.0.0"
 rustyline = "10.1.1"
 walkdir = "2.3.2"
 tokio-send-fd = "0.9.3"
+env_logger = "0.11.3"
 
 # unit test
 tempfile = "3.1.0"

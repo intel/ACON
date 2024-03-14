@@ -52,7 +52,7 @@ fn start_service() -> Result<(), Box<dyn std::error::Error>> {
             prctl::set_name("rpc_server").map_err(|e| anyhow!(e.to_string()))?;
 
             let rt = Builder::new_current_thread().enable_all().build()?;
-            rt.block_on(restful::run_server(cstream))?;
+            rt.block_on(restful::run_server(cstream, config.tcp_port))?;
 
             Ok(())
         }
@@ -64,6 +64,8 @@ fn start_service() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Uncomment it to debug.
+    // env_logger::init_from_env(env_logger::Env::default().default_filter_or("debug"));
     mount::mount_rootfs()?;
 
     start_service()?;
