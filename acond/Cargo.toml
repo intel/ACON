@@ -31,7 +31,7 @@ scopeguard = "1.0.0"
 rustyline = "10.1.1"
 walkdir = "2.3.2"
 tokio-send-fd = "0.9.3"
-env_logger = "0.11.3"
+#env_logger = "0.11.3"
 
 # unit test
 tempfile = "3.1.0"

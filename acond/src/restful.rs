@@ -85,7 +85,6 @@ async fn add_manifest(
 ) -> Result<HttpResponse, RestError> {
     let mut request = AddManifestRequest::default();
 
-    let mut index = 0;
     while let Ok(Some(mut field)) = payload.try_next().await {
         let mut data = vec![];
         while let Some(chunk) = field.next().await {
@@ -96,11 +95,10 @@ async fn add_manifest(
             );
         }
 
-        index += 1;
-        match index {
-            1 => request.manifest = data,
-            2 => request.signature = data,
-            3 => request.certificate = data,
+        match field.name() {
+            "manifest" => request.manifest = data,
+            "sig" => request.signature = data,
+            "cert" => request.certificate = data,
             _ => break,
         }
     }
@@ -253,6 +251,21 @@ async fn add_blob(
         1 => Err(get_rest_error(&response_buf[1..]).map_err(|e| RestError::Unknown(e.to_string()))?),
         _ => Err(RestError::Unknown("Server response format error".into())),
     }
+}
+
+async fn get_blob_size(blob_name: web::Path<String>) -> Result<HttpResponse, RestError> {
+    let blob_name = format!("/tmp/{}", blob_name.into_inner());
+    let blob_path = Path::new(blob_name.as_str());
+
+    let mut blob_size = 0;
+    if blob_path.exists() {
+        let metadata = blob_path
+            .metadata()
+            .map_err(|e| RestError::Unknown(e.to_string()))?;
+        blob_size = metadata.len()
+    }
+
+    Ok(HttpResponse::Ok().json(blob_size))
 }
 
 async fn start(
@@ -481,6 +494,7 @@ pub async fn run_server(
                 web::get().to(get_manifest),
             )
             .route("/api/v1/blob/{name}", web::put().to(add_blob))
+            .route("/api/v1/blob/{name}", web::get().to(get_blob_size))
             .route("/api/v1/container/start", web::post().to(start))
             .route("/api/v1/container/restart", web::post().to(restart))
             .route("/api/v1/container/exec", web::post().to(exec))
