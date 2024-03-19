@@ -192,7 +192,6 @@ func run(args []string) error {
 			vmConnTarget = fmt.Sprintf("vsock://%v:%v", prepareEnvVsock(), vmConnTarget)
 		} else {
 			prepareEnvTcp(string(vmConnTarget[1:]))
-			vmConnTarget = fmt.Sprintf("tcp://%v", vmConnTarget)
 		}
 
 		var err error

@@ -28,6 +28,25 @@ const (
 	endpointKill     = "/api/v1/container/kill"
 	endpointRestart  = "/api/v1/container/restart"
 
+	fieldManifest  = "manifest"
+	fieldSig       = "signature"
+	fieldCert      = "certificate"
+	fieldImgeId    = "image_id"
+	fieldMissLayer = "missing_layers"
+	fieldAlg       = "alg"
+	fieldBlob      = "data"
+	fieldEnvs      = "envs"
+	fieldConId     = "container_id"
+	fieldTimeout   = "timeout"
+	fieldCommand   = "command"
+	fieldArgs      = "arguments"
+	fieldStdin     = "stdin"
+	fieldCapSize   = "capture_size"
+	fieldSignum    = "signal_num"
+	fieldNonceLow  = "nonce_lo"
+	fieldNonceHigh = "nonce_hi"
+	fieldReqType   = "request_type"
+
 	clientMakeReqErrFmt   = "%s: error make request: %s"
 	clientSendReqErrFmt   = "%s: error send request: %s"
 	clientProcRespErrFmt  = "%s: error read response: %s"
@@ -114,6 +133,7 @@ func NewAconHttpConnection(host string, useTLS bool) (*AconClientHttp, error) {
 
 func processReponse(resp *http.Response) ([]byte, error) {
 	defer resp.Body.Close()
+	log.Println("status:", resp.Status)
 	if resp.StatusCode == http.StatusInternalServerError {
 		return nil, fmt.Errorf("internal error")
 	}
@@ -136,8 +156,7 @@ func (c *AconClientHttp) makeURL(endpoint string) string {
 }
 
 func multipartFile(w *multipart.Writer, fieldname, filename string) error {
-	filename = filepath.Clean(filename)
-	f, err := os.Open(filename)
+	f, err := os.Open(filepath.Clean(filename))
 	if err != nil {
 		return err
 	}
@@ -147,6 +166,7 @@ func multipartFile(w *multipart.Writer, fieldname, filename string) error {
 	if err != nil {
 		return err
 	}
+
 	fw, err := w.CreateFormFile(fieldname, fi.Name())
 	if err != nil {
 		return err
@@ -155,11 +175,44 @@ func multipartFile(w *multipart.Writer, fieldname, filename string) error {
 	return err
 }
 
+func multipartManifestField(w *multipart.Writer, fieldname, filename string) error {
+	f, err := os.Open(filepath.Clean(filename))
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	fi, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	aconJSON := make([]byte, fi.Size())
+	_, err = f.Read(aconJSON)
+	if err != nil {
+		return err
+	}
+
+	var v interface{}
+	if err := json.Unmarshal(aconJSON, &v); err != nil {
+		return err
+	}
+	aconJSON, err = json.Marshal(v)
+	if err != nil {
+		return err
+	}
+	fw, err := w.CreateFormFile(fieldname, fi.Name())
+	if err != nil {
+		return err
+	}
+	_, err = fw.Write(aconJSON)
+	return err
+}
+
 func (c *AconClientHttp) AddManifest(manifest, sig, cert string) (string, []string, error) {
 	requestURL := c.makeURL(endpointManifest)
 	body := &bytes.Buffer{}
 	w := multipart.NewWriter(body)
-	if err := multipartFile(w, "manifest", manifest); err != nil {
+	if err := multipartManifestField(w, "manifest", manifest); err != nil {
 		return "", nil, fmt.Errorf("AddManifest, prepare multipart error: %s", err)
 	}
 	if err := multipartFile(w, "sig", sig); err != nil {
@@ -192,12 +245,12 @@ func (c *AconClientHttp) AddManifest(manifest, sig, cert string) (string, []stri
 }
 
 func (c *AconClientHttp) AddBlob(alg uint32, blobpath string) error {
-	requestURL := c.makeURL(endpointBlob+"/"+filepath.Clean(blobpath)) +
-		"?alg=" + strconv.FormatUint(uint64(alg), 10)
-
+	blobpath = filepath.Clean(blobpath)
+	requestURL := fmt.Sprintf("%s/%s?%s=%s", c.makeURL(endpointBlob),
+		filepath.Base(blobpath), fieldAlg, strconv.FormatUint(uint64(alg), 10))
 	body := &bytes.Buffer{}
 	w := multipart.NewWriter(body)
-	if err := multipartFile(w, "blob", blobpath); err != nil {
+	if err := multipartFile(w, fieldBlob, blobpath); err != nil {
 		return fmt.Errorf("AddBlob, prepare multipart error: %s", err)
 	}
 	w.Close()
@@ -228,7 +281,7 @@ func (c *AconClientHttp) Finalize() error {
 
 	resp, err := c.Do(req)
 	if err != nil {
-		return fmt.Errorf(clientSendReqErrFmt, err)
+		return fmt.Errorf(clientSendReqErrFmt, "Finalize", err)
 	}
 	if _, err = processReponse(resp); err != nil {
 		return fmt.Errorf(clientProcRespErrFmt, "Finalize", err)
@@ -240,9 +293,9 @@ func (c *AconClientHttp) Finalize() error {
 func (c *AconClientHttp) Start(imageId string, env []string) (uint32, error) {
 	requestURL := c.makeURL(endpointStart)
 	d := url.Values{}
-	d.Set("imageId", imageId)
+	d.Set(fieldImgeId, imageId)
 	for _, e := range env {
-		d.Add("env", e)
+		d.Add(fieldEnvs, e)
 	}
 
 	resp, err := c.PostForm(requestURL, d)
@@ -263,8 +316,8 @@ func (c *AconClientHttp) Start(imageId string, env []string) (uint32, error) {
 func (c *AconClientHttp) Kill(cid uint32, signum int32) error {
 	requestURL := c.makeURL(endpointKill)
 	d := url.Values{}
-	d.Set("cid", strconv.FormatUint(uint64(cid), 10))
-	d.Set("signum", strconv.FormatInt(int64(signum), 10))
+	d.Set(fieldConId, strconv.FormatUint(uint64(cid), 10))
+	d.Set(fieldSignum, strconv.FormatInt(int64(signum), 10))
 
 	resp, err := c.PostForm(requestURL, d)
 	if err != nil {
@@ -280,8 +333,8 @@ func (c *AconClientHttp) Kill(cid uint32, signum int32) error {
 func (c *AconClientHttp) Restart(cid uint32, timeout uint64) error {
 	requestURL := c.makeURL(endpointRestart)
 	d := url.Values{}
-	d.Set("cid", strconv.FormatUint(uint64(cid), 10))
-	d.Set("timeout", strconv.FormatUint(timeout, 10))
+	d.Set(fieldConId, strconv.FormatUint(uint64(cid), 10))
+	d.Set(fieldTimeout, strconv.FormatUint(timeout, 10))
 
 	resp, err := c.PostForm(requestURL, d)
 	if err != nil {
@@ -297,20 +350,21 @@ func (c *AconClientHttp) Restart(cid uint32, timeout uint64) error {
 func (c *AconClientHttp) Invoke(cid uint32, invocation []string,
 	timeout uint64, env []string, datafile string, capture_size uint64) ([]byte, []byte, error) {
 	requestURL := c.makeURL(endpointExec)
-
 	body := &bytes.Buffer{}
 	w := multipart.NewWriter(body)
-	if err := multipartFile(w, "stdin", datafile); err != nil {
-		return nil, nil, fmt.Errorf("Invoke, prepare multipart error: %s", err)
+	if datafile != "" {
+		if err := multipartFile(w, fieldStdin, datafile); err != nil {
+			return nil, nil, fmt.Errorf("Invoke, prepare multipart error: %s", err)
+		}
 	}
-	w.WriteField("cid", strconv.FormatUint(uint64(cid), 10))
-	w.WriteField("timeout", strconv.FormatUint(timeout, 10))
-	w.WriteField("capture_size", strconv.FormatUint(capture_size, 10))
+	w.WriteField(fieldConId, strconv.FormatUint(uint64(cid), 10))
+	w.WriteField(fieldTimeout, strconv.FormatUint(timeout, 10))
+	w.WriteField(fieldCapSize, strconv.FormatUint(capture_size, 10))
 	for _, arg := range invocation {
-		w.WriteField("invocation", arg)
+		w.WriteField(fieldCommand, arg)
 	}
 	for _, e := range env {
-		w.WriteField("env", e)
+		w.WriteField(fieldEnvs, e)
 	}
 	w.Close()
 
@@ -337,8 +391,9 @@ func (c *AconClientHttp) Invoke(cid uint32, invocation []string,
 }
 
 func (c *AconClientHttp) Inspect(cid uint32) ([]AconStatus, error) {
-	requestURL := c.makeURL(endpointInspect)
-	resp, err := c.Get(requestURL + "?cid=" + strconv.FormatUint(uint64(cid), 10))
+	requestURL := fmt.Sprintf("%s?%s=%s", c.makeURL(endpointInspect),
+		fieldConId, strconv.FormatUint(uint64(cid), 10))
+	resp, err := c.Get(requestURL)
 	if err != nil {
 		return nil, fmt.Errorf(clientSendReqErrFmt, "Inspect", err)
 	}
@@ -356,11 +411,11 @@ func (c *AconClientHttp) Inspect(cid uint32) ([]AconStatus, error) {
 
 func (c *AconClientHttp) Report(nonceLo, nonceHi uint64, reqType uint32) (data []byte,
 	mrlog0 []string, mrlog1 []string, mrlog2 []string, mrlog3 []string, attest_data string, e error) {
-	requestURL := c.makeURL(endpointReport)
-	resp, err := c.Get(requestURL +
-		"?nonce-low=" + strconv.FormatUint(nonceLo, 10) +
-		"&nonce-high=" + strconv.FormatUint(nonceHi, 10) +
-		"&type=" + strconv.FormatUint(uint64(reqType), 10))
+	requestURL := fmt.Sprintf("%s?%s=%s&%s=%s&%s=%s", c.makeURL(endpointReport),
+		fieldNonceLow, strconv.FormatUint(nonceLo, 10),
+		fieldNonceHigh, strconv.FormatUint(nonceHi, 10),
+		fieldReqType, strconv.FormatUint(uint64(reqType), 10))
+	resp, err := c.Get(requestURL)
 	if err != nil {
 		e = fmt.Errorf(clientSendReqErrFmt, "Report", err)
 		return
