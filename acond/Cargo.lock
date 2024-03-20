@@ -29,6 +29,7 @@ dependencies = [
  "tokio-vsock",
  "tonic",
  "tonic-build",
+ "url",
  "walkdir",
 ]
 

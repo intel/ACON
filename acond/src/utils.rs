@@ -23,6 +23,7 @@ use std::{
     os::unix::fs as unixfs,
     os::unix::io::AsRawFd,
     path::{Path, PathBuf},
+    str,
     sync::atomic::{AtomicUsize, Ordering},
 };
 use tar::Archive;
@@ -725,6 +726,18 @@ pub fn parse_content_range(header: &str) -> Option<u64> {
     }
 
     range_bounds[0].trim().parse().ok()
+}
+
+pub fn convert_ascii_bytes_to_u32(bytes: &[u8]) -> Result<u32> {
+    let string = str::from_utf8(bytes)?;
+    let num = string.parse::<u32>()?;
+    Ok(num)
+}
+
+pub fn convert_ascii_bytes_to_u64(bytes: &[u8]) -> Result<u64> {
+    let string = str::from_utf8(bytes)?;
+    let num = string.parse::<u64>()?;
+    Ok(num)
 }
 
 #[cfg(test)]

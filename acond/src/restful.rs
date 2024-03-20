@@ -28,6 +28,7 @@ use openssl::{
 };
 use serde::Deserialize;
 use std::{
+    collections::HashMap,
     fmt, fs,
     io::SeekFrom,
     os::{fd::AsRawFd, unix::net::UnixStream as StdUnixStream},
@@ -67,7 +68,7 @@ impl ResponseError for RestError {
     fn status_code(&self) -> StatusCode {
         match *self {
             RestError::Unknown(_) => StatusCode::INTERNAL_SERVER_ERROR,
-            RestError::InvalidArgument(_) => StatusCode::OK,
+            RestError::InvalidArgument(_) => StatusCode::BAD_REQUEST,
             RestError::DeadlineExceeded(_) => StatusCode::REQUEST_TIMEOUT,
             RestError::PermissionDenied(_) => StatusCode::UNAUTHORIZED,
         }
@@ -99,7 +100,7 @@ async fn add_manifest(
             "manifest" => request.manifest = data,
             "sig" => request.signature = data,
             "cert" => request.certificate = data,
-            _ => break,
+            _ => continue,
         }
     }
 
@@ -269,11 +270,31 @@ async fn get_blob_size(blob_name: web::Path<String>) -> Result<HttpResponse, Res
 }
 
 async fn start(
-    request: web::Form<StartRequest>,
+    mut payload: web::Payload,
     service: web::Data<ExchangeService>,
 ) -> Result<HttpResponse, RestError> {
+    let mut body = web::BytesMut::new();
+    while let Some(chunk) = payload.next().await {
+        let chunk = chunk.map_err(|e| RestError::Unknown(e.to_string()))?;
+        body.extend_from_slice(&chunk);
+    }
+
+    let mut data: HashMap<String, Vec<String>> = HashMap::new();
+    for (key, value) in url::form_urlencoded::parse(body.as_ref()) {
+        data.entry(key.into_owned())
+            .or_default()
+            .push(value.into_owned());
+    }
+
+    let image_id = data
+        .remove("image_id")
+        .and_then(|mut v| v.pop())
+        .unwrap_or_default();
+    let envs = data.remove("envs").unwrap_or_default();
+
+    let request = StartRequest { image_id, envs };
     let mut request_buf: Vec<u8> =
-        bincode::serialize(&request.into_inner()).map_err(|e| RestError::Unknown(e.to_string()))?;
+        bincode::serialize(&request).map_err(|e| RestError::Unknown(e.to_string()))?;
 
     let response_buf = service
         .send_recv(4, &mut request_buf)
@@ -311,11 +332,51 @@ async fn restart(
 }
 
 async fn exec(
-    request: web::Form<ExecRequest>,
+    mut payload: actix_multipart::Multipart,
     service: web::Data<ExchangeService>,
 ) -> Result<HttpResponse, RestError> {
+    let mut request = ExecRequest::default();
+
+    while let Ok(Some(mut field)) = payload.try_next().await {
+        let mut data = vec![];
+        while let Some(chunk) = field.next().await {
+            data.append(
+                &mut chunk
+                    .map_err(|e| RestError::Unknown(e.to_string()))?
+                    .to_vec(),
+            );
+        }
+
+        match field.name() {
+            "container_id" => {
+                request.container_id = utils::convert_ascii_bytes_to_u32(&data)
+                    .map_err(|e| RestError::InvalidArgument(e.to_string()))?
+            }
+            "command" => {
+                request.command = String::from_utf8(data)
+                    .map_err(|e| RestError::InvalidArgument(e.to_string()))?
+            }
+            "timeout" => {
+                request.timeout = utils::convert_ascii_bytes_to_u64(&data)
+                    .map_err(|e| RestError::InvalidArgument(e.to_string()))?
+            }
+            "arguments" => request.arguments.push(
+                String::from_utf8(data).map_err(|e| RestError::InvalidArgument(e.to_string()))?,
+            ),
+            "envs" => request.envs.push(
+                String::from_utf8(data).map_err(|e| RestError::InvalidArgument(e.to_string()))?,
+            ),
+            "stdin" => request.stdin = data,
+            "capture_size" => {
+                request.capture_size = utils::convert_ascii_bytes_to_u64(&data)
+                    .map_err(|e| RestError::InvalidArgument(e.to_string()))?
+            }
+            _ => continue,
+        }
+    }
+
     let mut request_buf: Vec<u8> =
-        bincode::serialize(&request.into_inner()).map_err(|e| RestError::Unknown(e.to_string()))?;
+        bincode::serialize(&request).map_err(|e| RestError::Unknown(e.to_string()))?;
 
     let response_buf = service
         .send_recv(6, &mut request_buf)

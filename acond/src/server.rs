@@ -361,7 +361,7 @@ pub struct RestartRequest {
     pub timeout: u64,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Default)]
 pub struct ExecRequest {
     pub container_id: u32,
     pub command: String,
