@@ -53,7 +53,7 @@ func stopAcon(c service.AconClient, id uint32) error {
 }
 
 func stopAconInVM(conn string, ids []uint32) error {
-	c, err := service.NewAconHttpConnection(conn, true)
+	c, err := service.NewAconHttpConnWithOpts(conn, service.OptDialTLSContextInsecure())
 	if err != nil {
 		return fmt.Errorf("cannot connect to %s: %v\n", conn, err)
 	}

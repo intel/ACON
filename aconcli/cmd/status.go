@@ -33,7 +33,7 @@ them.
 }
 
 func getAllStatus(target string) ([]service.AconStatus, error) {
-	c, err := service.NewAconHttpConnection(target, true)
+	c, err := service.NewAconHttpConnWithOpts(target, service.OptDialTLSContextInsecure())
 	if err != nil {
 		return nil, err
 	}

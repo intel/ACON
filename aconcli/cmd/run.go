@@ -151,7 +151,7 @@ func loadAll(c service.AconClient, r *repo.Repo,
 
 // caller needs to close the connection
 func connect(conn string) (*service.AconClientHttp, error) {
-	return service.NewAconHttpConnection(conn, true)
+	return service.NewAconHttpConnWithOpts(conn, service.OptDialTLSContextInsecure())
 }
 
 func prepareEnvVsock() string {

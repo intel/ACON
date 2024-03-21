@@ -40,7 +40,7 @@ func kill(args []string) error {
 		fmt.Fprintf(os.Stderr, "Kill: cannot get signal number from %s: %v\n", args[0], err)
 		return err
 	}
-	c, err := service.NewAconHttpConnection(vmConnTarget, true)
+	c, err := service.NewAconHttpConnWithOpts(vmConnTarget, service.OptDialTLSContextInsecure())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Kill: cannot connect to %s: %v\n", vmConnTarget, err)
 		return err

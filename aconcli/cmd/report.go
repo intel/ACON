@@ -97,7 +97,7 @@ ACON TDs/VMs and ACON containers running in them.
 }
 
 func getReport(args []string) error {
-	c, err := service.NewAconHttpConnection(vmConnTarget, true)
+	c, err := service.NewAconHttpConnWithOpts(vmConnTarget, service.OptDialTLSContextInsecure())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Report: cannot connect to %s: %v\n", vmConnTarget, err)
 		return err

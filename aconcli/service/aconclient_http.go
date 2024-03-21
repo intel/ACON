@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -15,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"time"
 )
 
 const (
@@ -87,22 +89,29 @@ type GetManifestResponse struct {
 }
 
 type AconClientHttp struct {
-	*http.Client
-	Host   string
-	UseTLS bool
+	client *http.Client
+	host   string
+	scheme string
 }
 
 func customizedVC(s tls.ConnectionState) error {
-	fmt.Println("checking connection state ...")
+	fmt.Println("verifying connection state ...")
 	// TODO: add customized checks here
-	fmt.Println("check pass")
+	fmt.Println("verification pass")
 	return nil
 }
 
-func NewAconHttpConnection(host string, useTLS bool) (*AconClientHttp, error) {
-	log.Println("Service: Connecting", host)
-	var client *http.Client
-	if useTLS {
+type Opt func(*AconClientHttp) error
+
+func OptTimeout(timeout time.Duration) Opt {
+	return func(c *AconClientHttp) error {
+		c.client.Timeout = timeout
+		return nil
+	}
+}
+
+func OptDialTLSContextInsecure() Opt {
+	return func(c *AconClientHttp) error {
 		tr := &http.Transport{
 			DialTLSContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 				conn, err := tls.Dial(network, addr, &tls.Config{
@@ -115,30 +124,81 @@ func NewAconHttpConnection(host string, useTLS bool) (*AconClientHttp, error) {
 				return conn, nil
 			},
 		}
-		client = &http.Client{
-			Transport: tr,
-			Timeout:   defaultServiceTimeout,
+		c.client.Transport = tr
+		c.scheme = "https"
+		return nil
+	}
+}
+
+func OptDialTLSContext(caCertFilePath string) Opt {
+	return func(c *AconClientHttp) error {
+		certPool := x509.NewCertPool()
+		if caCertPEM, err := os.ReadFile(caCertFilePath); err != nil {
+			return err
+		} else if ok := certPool.AppendCertsFromPEM(caCertPEM); !ok {
+			return fmt.Errorf("invalid cert in CA cert file")
 		}
-	} else {
-		client = &http.Client{
-			Timeout: defaultServiceTimeout,
+		tr := &http.Transport{
+			DialTLSContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+				conn, err := tls.Dial(network, addr, &tls.Config{RootCAs: certPool})
+				if err != nil {
+					return nil, err
+				}
+				return conn, nil
+			},
+		}
+		c.client.Transport = tr
+		c.scheme = "https"
+		return nil
+	}
+}
+func NewAconHttpConnWithOpts(host string, opts ...Opt) (*AconClientHttp, error) {
+	log.Println("Service: Connecting", host)
+	c := &AconClientHttp{&http.Client{}, host, "http"}
+	for _, opt := range opts {
+		if err := opt(c); err != nil {
+			return nil, err
 		}
 	}
-	return &AconClientHttp{
-		client,
-		host,
-		useTLS,
-	}, nil
+	return c, nil
 }
+
+//func NewAconHttpConnection(host string, useTLS bool) (*AconClientHttp, error) {
+//	log.Println("Service: Connecting", host)
+//	var client *http.Client
+//	if useTLS {
+//		tr := &http.Transport{
+//			DialTLSContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+//				conn, err := tls.Dial(network, addr, &tls.Config{
+//					InsecureSkipVerify: true,
+//					VerifyConnection:   customizedVC,
+//				})
+//				if err != nil {
+//					return nil, err
+//				}
+//				return conn, nil
+//			},
+//		}
+//		client = &http.Client{
+//			Transport: tr,
+//			Timeout:   defaultServiceTimeout,
+//		}
+//	} else {
+//		client = &http.Client{
+//			Timeout: defaultServiceTimeout,
+//		}
+//	}
+//	return &AconClientHttp{
+//		client,
+//		host,
+//		useTLS,
+//	}, nil
+//}
 
 func processReponse(resp *http.Response) ([]byte, error) {
 	defer resp.Body.Close()
-	log.Println("status:", resp.Status)
-	if resp.StatusCode == http.StatusInternalServerError {
-		return nil, fmt.Errorf("internal error")
-	}
-	if resp.StatusCode == http.StatusBadRequest {
-		return nil, fmt.Errorf("bad request")
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("http status: %s", resp.Status)
 	}
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -148,11 +208,7 @@ func processReponse(resp *http.Response) ([]byte, error) {
 }
 
 func (c *AconClientHttp) makeURL(endpoint string) string {
-	scheme := "http"
-	if c.UseTLS {
-		scheme = "https"
-	}
-	return scheme + "://" + c.Host + endpoint
+	return c.scheme + "://" + c.host + endpoint
 }
 
 func multipartFile(w *multipart.Writer, fieldname, filename string) error {
@@ -229,7 +285,7 @@ func (c *AconClientHttp) AddManifest(manifest, sig, cert string) (string, []stri
 	}
 	req.Header.Add("Content-Type", w.FormDataContentType())
 
-	resp, err := c.Do(req)
+	resp, err := c.client.Do(req)
 	if err != nil {
 		return "", nil, fmt.Errorf(clientSendReqErrFmt, "AddManifest", err)
 	}
@@ -261,7 +317,7 @@ func (c *AconClientHttp) AddBlob(alg uint32, blobpath string) error {
 	}
 	req.Header.Add("Content-Type", w.FormDataContentType())
 
-	resp, err := c.Do(req)
+	resp, err := c.client.Do(req)
 	if err != nil {
 		return fmt.Errorf(clientSendReqErrFmt, "AddBlob", err)
 	}
@@ -279,7 +335,7 @@ func (c *AconClientHttp) Finalize() error {
 		return fmt.Errorf(clientMakeReqErrFmt, "Finalize", err)
 	}
 
-	resp, err := c.Do(req)
+	resp, err := c.client.Do(req)
 	if err != nil {
 		return fmt.Errorf(clientSendReqErrFmt, "Finalize", err)
 	}
@@ -298,7 +354,7 @@ func (c *AconClientHttp) Start(imageId string, env []string) (uint32, error) {
 		d.Add(fieldEnvs, e)
 	}
 
-	resp, err := c.PostForm(requestURL, d)
+	resp, err := c.client.PostForm(requestURL, d)
 	if err != nil {
 		return 0, fmt.Errorf(clientSendReqErrFmt, "Start", err)
 	}
@@ -319,7 +375,7 @@ func (c *AconClientHttp) Kill(cid uint32, signum int32) error {
 	d.Set(fieldConId, strconv.FormatUint(uint64(cid), 10))
 	d.Set(fieldSignum, strconv.FormatInt(int64(signum), 10))
 
-	resp, err := c.PostForm(requestURL, d)
+	resp, err := c.client.PostForm(requestURL, d)
 	if err != nil {
 		return fmt.Errorf(clientSendReqErrFmt, "Kill", err)
 	}
@@ -336,7 +392,7 @@ func (c *AconClientHttp) Restart(cid uint32, timeout uint64) error {
 	d.Set(fieldConId, strconv.FormatUint(uint64(cid), 10))
 	d.Set(fieldTimeout, strconv.FormatUint(timeout, 10))
 
-	resp, err := c.PostForm(requestURL, d)
+	resp, err := c.client.PostForm(requestURL, d)
 	if err != nil {
 		return fmt.Errorf(clientSendReqErrFmt, "Restart", err)
 	}
@@ -374,7 +430,7 @@ func (c *AconClientHttp) Invoke(cid uint32, invocation []string,
 	}
 	req.Header.Add("Content-Type", w.FormDataContentType())
 
-	resp, err := c.Do(req)
+	resp, err := c.client.Do(req)
 	if err != nil {
 		return nil, nil, fmt.Errorf(clientSendReqErrFmt, "Invoke", err)
 	}
@@ -393,7 +449,7 @@ func (c *AconClientHttp) Invoke(cid uint32, invocation []string,
 func (c *AconClientHttp) Inspect(cid uint32) ([]AconStatus, error) {
 	requestURL := fmt.Sprintf("%s?%s=%s", c.makeURL(endpointInspect),
 		fieldConId, strconv.FormatUint(uint64(cid), 10))
-	resp, err := c.Get(requestURL)
+	resp, err := c.client.Get(requestURL)
 	if err != nil {
 		return nil, fmt.Errorf(clientSendReqErrFmt, "Inspect", err)
 	}
@@ -415,7 +471,7 @@ func (c *AconClientHttp) Report(nonceLo, nonceHi uint64, reqType uint32) (data [
 		fieldNonceLow, strconv.FormatUint(nonceLo, 10),
 		fieldNonceHigh, strconv.FormatUint(nonceHi, 10),
 		fieldReqType, strconv.FormatUint(uint64(reqType), 10))
-	resp, err := c.Get(requestURL)
+	resp, err := c.client.Get(requestURL)
 	if err != nil {
 		e = fmt.Errorf(clientSendReqErrFmt, "Report", err)
 		return

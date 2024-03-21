@@ -38,7 +38,7 @@ capital letter.
 }
 
 func invoke(args []string) error {
-	c, err := service.NewAconHttpConnection(vmConnTarget, true)
+	c, err := service.NewAconHttpConnWithOpts(vmConnTarget, service.OptDialTLSContextInsecure())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Invoke: cannot connect to %s: %v\n", vmConnTarget, err)
 		return err
