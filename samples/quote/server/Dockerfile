@@ -7,10 +7,12 @@
 
 FROM alpine:latest AS builder
 
-RUN apk update && apk add g++ libc++-static
+ARG https_proxy
+
+RUN https_proxy=${https_proxy} apk update && apk add g++ libc++-static
 WORKDIR /work
 COPY sdk/ samples/quote/server/ ./
-RUN c++ -std=c++14 -Os -static-pie -flto -Iinclude/ -Wl,--gc-sections,-s src/quote_server.cpp -o quote_server
+RUN c++ -std=c++14 -Os -static-pie -flto -Iinclude/ -Wl,--gc-sections,-s src/*.cpp -o quote_server
 
 FROM scratch
 

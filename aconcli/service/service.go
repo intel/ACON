@@ -11,6 +11,7 @@ import (
 	nc "aconcli/netconn"
 	pb "aconcli/proto"
 	"google.golang.org/grpc"
+	emptypb "google.golang.org/protobuf/types/known/emptypb"
 )
 
 type AconClient struct {
@@ -69,6 +70,14 @@ func AddBlob(sc pb.AconServiceClient, alg uint32, data []byte) error {
 	defer cancel()
 
 	_, err := sc.AddBlob(ctx, &pb.AddBlobRequest{Alg: alg, Data: data})
+	return err
+}
+
+func Finalize(sc pb.AconServiceClient) error {
+	ctx, cancel := context.WithTimeout(context.Background(), defaultServiceTimeout)
+	defer cancel()
+
+	_, err := sc.Finalize(ctx, &emptypb.Empty{})
 	return err
 }
 

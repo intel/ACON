@@ -9,7 +9,17 @@
 #include <memory>
 #include <tuple>
 #include <iostream>
+#include <thread>
 #include "acon_client.h"
+
+#define DEFAULT_FONT "\x1b(B\x1b[m"
+#define RED_FONT     "\x1b[31m"
+#define GREEN_FONT   "\x1b[32m"
+#define BLUE_FONT    "\x1b[34m"
+#define BOLD_FONT    "\x1b[1m"
+#define INFO         BLUE_FONT "INFO" DEFAULT_FONT "\t"
+#define ERROR        RED_FONT "ERROR" DEFAULT_FONT "\t"
+#define DONE         GREEN_FONT "DONE" DEFAULT_FONT "\t"
 
 using namespace std;
 
@@ -86,7 +96,7 @@ public:
 
         if (msg_hdr.command < 0)
         {
-            cerr << "Err: " << msg_buf.get() + sizeof(acon_message_err_t) << ".(acond)" << endl;
+            //cerr << "Err: " << msg_buf.get() + sizeof(acon_message_err_t) << ".(acond)" << endl;
             return NULL;
         }
 
@@ -124,7 +134,7 @@ private:
 
 unique_ptr<uint8_t[]> get_quote(size_t *size)
 {
-    const char *attest_data = "ATTEST DATA";
+    const char *attest_data = "Hello from an ACON container!";
 
     size_t send_buf_hdr_size = sizeof(acon_get_report_req_t);
     size_t send_buf_body_size = strlen(attest_data);
@@ -197,14 +207,18 @@ int main(int argc, char *argv[])
         exit(EXIT_FAILURE);
     }
 
+    if (listen(server_fd, 1) < 0)
+    {
+        cerr << "Err: can't listen for connections on a socket." << endl;
+        exit(EXIT_FAILURE);
+    }
+
+    // This sleep helps avoid intertwining our stdout with aconcli's
+    this_thread::sleep_for(200ms);
+    cout << INFO "Server listening on PORT " << ntohs(serv_addr.sin_port) << endl;
+
     while (1)
     {
-        if (listen(server_fd, 1) < 0)
-        {
-            cerr << "Err: can't listen for connections on a socket." << endl;
-            exit(EXIT_FAILURE);
-        }
-
         struct sockaddr_in sock_addr;
         socklen_t sock_addr_size = sizeof(sock_addr);
         int sock_fd = accept(server_fd, (sockaddr *)&sock_addr, &sock_addr_size);
@@ -213,12 +227,25 @@ int main(int argc, char *argv[])
             cerr << "Err: can't accept a connection on a socket." << endl;
             exit(EXIT_FAILURE);
         }
+        cout << INFO "Quote requested by client" << endl;
 
-        size_t data_size;
+        cout << INFO "Retrieving Quote" << endl;
+        size_t data_size = 0;
         auto data = get_quote(&data_size);
-        ssize_t ret = send(sock_fd, data.get(), data_size, 0);
+        if (data_size == 0)
+        {
+            cout << ERROR "Failed retrieving Quote! Am I in a TD?" << endl;
+        }
+        else
+        {
+            cout << INFO "Retrieved Quote successfully" << endl;
+
+            ssize_t ret = send(sock_fd, data.get(), data_size, 0);
+            cout << INFO "Quote sent to client" << endl;
+        }
 
         close(sock_fd);
+        cout << DONE "Connection closed" << endl;
     }
 
     exit(EXIT_SUCCESS);
