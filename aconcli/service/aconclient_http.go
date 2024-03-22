@@ -31,8 +31,8 @@ const (
 	endpointRestart  = "/api/v1/container/restart"
 
 	fieldManifest  = "manifest"
-	fieldSig       = "signature"
-	fieldCert      = "certificate"
+	fieldSig       = "sig"
+	fieldCert      = "cert"
 	fieldImgeId    = "image_id"
 	fieldMissLayer = "missing_layers"
 	fieldAlg       = "alg"
@@ -163,38 +163,6 @@ func NewAconHttpConnWithOpts(host string, opts ...Opt) (*AconClientHttp, error) 
 	return c, nil
 }
 
-//func NewAconHttpConnection(host string, useTLS bool) (*AconClientHttp, error) {
-//	log.Println("Service: Connecting", host)
-//	var client *http.Client
-//	if useTLS {
-//		tr := &http.Transport{
-//			DialTLSContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-//				conn, err := tls.Dial(network, addr, &tls.Config{
-//					InsecureSkipVerify: true,
-//					VerifyConnection:   customizedVC,
-//				})
-//				if err != nil {
-//					return nil, err
-//				}
-//				return conn, nil
-//			},
-//		}
-//		client = &http.Client{
-//			Transport: tr,
-//			Timeout:   defaultServiceTimeout,
-//		}
-//	} else {
-//		client = &http.Client{
-//			Timeout: defaultServiceTimeout,
-//		}
-//	}
-//	return &AconClientHttp{
-//		client,
-//		host,
-//		useTLS,
-//	}, nil
-//}
-
 func processReponse(resp *http.Response) ([]byte, error) {
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
@@ -268,13 +236,13 @@ func (c *AconClientHttp) AddManifest(manifest, sig, cert string) (string, []stri
 	requestURL := c.makeURL(endpointManifest)
 	body := &bytes.Buffer{}
 	w := multipart.NewWriter(body)
-	if err := multipartManifestField(w, "manifest", manifest); err != nil {
+	if err := multipartManifestField(w, fieldManifest, manifest); err != nil {
 		return "", nil, fmt.Errorf("AddManifest, prepare multipart error: %s", err)
 	}
-	if err := multipartFile(w, "sig", sig); err != nil {
+	if err := multipartFile(w, fieldSig, sig); err != nil {
 		return "", nil, fmt.Errorf("AddManifest, prepare multipart error: %s", err)
 	}
-	if err := multipartFile(w, "cert", cert); err != nil {
+	if err := multipartFile(w, fieldCert, cert); err != nil {
 		return "", nil, fmt.Errorf("AddManifest, prepare multipart error: %s", err)
 	}
 	w.Close()
