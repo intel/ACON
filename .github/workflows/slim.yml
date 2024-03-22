@@ -15,7 +15,7 @@ jobs:
     runs-on: ubuntu-latest
     name: Debian Builds
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@8ade135a41bc03ea155e62e844d188df1ea18608
     - name: Debian builds
       shell: docker build --progress=plain -t acond -f {0} .
       run: |

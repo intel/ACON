@@ -19,7 +19,7 @@ jobs:
     runs-on: self-hosted
     name: CICD-Nginx
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@8ade135a41bc03ea155e62e844d188df1ea18608
     - name: Enable Nginx docker
       run: |
         source scripts/start-happypath.sh
