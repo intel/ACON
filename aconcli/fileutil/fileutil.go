@@ -20,6 +20,7 @@ type m struct {
 }
 
 func UntarBlob(r io.Reader) ([]string, map[string][]byte, error) {
+	tmpData := make(map[string][]byte)
 	layerData := make(map[string][]byte)
 	var layerString []string
 	tr := tar.NewReader(r)
@@ -38,12 +39,13 @@ func UntarBlob(r io.Reader) ([]string, map[string][]byte, error) {
 
 		switch header.Typeflag {
 		case tar.TypeReg:
-			if strings.HasSuffix(header.Name, ".tar") {
+			if strings.HasSuffix(header.Name, ".tar") ||
+				strings.HasPrefix(header.Name, "blobs") {
 				data, err := ioutil.ReadAll(tr)
 				if err != nil {
 					return nil, nil, err
 				}
-				layerData[header.Name] = data
+				tmpData[header.Name] = data
 			}
 			if header.Name == "manifest.json" {
 				data, err := ioutil.ReadAll(tr)
@@ -56,6 +58,9 @@ func UntarBlob(r io.Reader) ([]string, map[string][]byte, error) {
 					return nil, nil, err
 				}
 				layerString = manifest[0].Layers
+				for _, layer := range layerString {
+					layerData[layer] = tmpData[layer]
+				}
 			}
 		}
 	}
