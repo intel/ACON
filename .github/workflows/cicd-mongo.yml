@@ -2,11 +2,11 @@ name: CICD-MongoDB
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ "*" ]
     paths-ignore:
       - 'doc/**'
   pull_request:
-    branches: [ "main" ]
+    branches: [ "*" ]
     paths-ignore:
       - 'doc/**'
 
