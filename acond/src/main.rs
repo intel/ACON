@@ -11,7 +11,7 @@ use nix::{
     sys::reboot::{self, RebootMode},
     unistd::{self, ForkResult, Gid, Pid, Uid},
 };
-use std::os::unix::net::UnixStream;
+use std::{fs, os::unix::net::UnixStream, path::Path};
 use tokio::runtime::Builder;
 
 mod config;
@@ -32,10 +32,16 @@ fn start_service() -> Result<(), Box<dyn std::error::Error>> {
     let mut config = Config::new();
     config.parse_cmdline(None)?;
 
+    let gid = Gid::from_raw(1);
+    let uid = Uid::from_raw(1);
     let (pstream, cstream) = UnixStream::pair()?;
 
     match unsafe { unistd::fork() } {
         Ok(ForkResult::Parent { child: _ }) => {
+            let path = Path::new("/run/user").join(format!("{}", uid));
+            fs::create_dir_all(&path)?;
+            unistd::chown(&path, Some(uid), Some(gid))?;
+
             pstream.set_nonblocking(true)?;
             let rt = Builder::new_current_thread().enable_all().build()?;
             rt.block_on(server::start_server(pstream, &config))?;
@@ -45,8 +51,6 @@ fn start_service() -> Result<(), Box<dyn std::error::Error>> {
         }
         Ok(ForkResult::Child) => {
             cstream.set_nonblocking(true)?;
-            let gid = Gid::from_raw(1);
-            let uid = Uid::from_raw(1);
             unistd::setresgid(gid, gid, gid)?;
             unistd::setresuid(uid, uid, uid)?;
             prctl::set_name("rpc_server").map_err(|e| anyhow!(e.to_string()))?;

@@ -346,7 +346,6 @@ pub struct AddBlobRequest {
 #[derive(Serialize, Deserialize)]
 pub struct StartRequest {
     pub image_id: String,
-    #[serde(default)]
     pub envs: Vec<String>,
 }
 
@@ -361,16 +360,13 @@ pub struct RestartRequest {
     pub timeout: u64,
 }
 
-#[derive(Serialize, Deserialize, Default)]
+#[derive(Serialize, Deserialize)]
 pub struct ExecRequest {
     pub container_id: u32,
     pub command: String,
     pub timeout: u64,
-    #[serde(default)]
     pub arguments: Vec<String>,
-    #[serde(default)]
     pub envs: Vec<String>,
-    #[serde(default)]
     pub stdin: Vec<u8>,
     pub capture_size: u64,
 }

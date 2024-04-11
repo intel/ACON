@@ -10,26 +10,28 @@ use crate::{
     },
     utils,
 };
-use actix_multipart::Multipart;
 use actix_web::{
     http::{self, StatusCode},
     web, App, HttpResponse, HttpServer, ResponseError,
 };
 use anyhow::{anyhow, Result};
 use futures::{StreamExt, TryStreamExt};
-use nix::unistd;
+use nix::{
+    fcntl::{self, FlockArg},
+    unistd,
+};
 use openssl::{
     asn1::Asn1Time,
+    ec::{EcGroup, EcKey},
     hash::MessageDigest,
+    nid::Nid,
     pkey::PKey,
-    rsa::Rsa,
     ssl::{SslAcceptor, SslMethod},
     x509::{extension::BasicConstraints, X509Builder, X509NameBuilder},
 };
 use serde::Deserialize;
 use std::{
-    collections::HashMap,
-    fmt, fs,
+    fmt,
     io::SeekFrom,
     os::{fd::AsRawFd, unix::net::UnixStream as StdUnixStream},
     path::Path,
@@ -81,7 +83,7 @@ impl ResponseError for RestError {
 }
 
 async fn add_manifest(
-    mut payload: Multipart,
+    mut payload: actix_multipart::Multipart,
     service: web::Data<ExchangeService>,
 ) -> Result<HttpResponse, RestError> {
     let mut request = AddManifestRequest::default();
@@ -162,86 +164,67 @@ async fn get_manifest(
 }
 
 #[derive(Deserialize)]
-struct Alg {
+struct AddBlobQueryParam {
     alg: u32,
 }
 
 async fn add_blob(
     blob_name: web::Path<String>,
-    blob_alg: web::Query<Alg>,
-    mut payload: Multipart,
+    query_param: web::Query<AddBlobQueryParam>,
     range: Option<web::Header<http::header::ContentRange>>,
+    mut payload: web::Payload,
     service: web::Data<ExchangeService>,
 ) -> Result<HttpResponse, RestError> {
-    let blob_name = format!("/tmp/{}", blob_name.into_inner());
+    let blob_name = format!("/run/user/1/{}", *blob_name);
     let blob_path = Path::new(blob_name.as_str());
-    fs::create_dir_all(blob_path.parent().unwrap())
-        .map_err(|e| RestError::Unknown(e.to_string()))?;
 
-    loop {
-        let field = payload
-            .try_next()
-            .await
-            .map_err(|e| RestError::Unknown(e.to_string()))?;
-        if field.is_none() {
-            break;
-        }
-
-        let mut field = field.unwrap();
-        if let Some(ref value) = range {
-            let range = value.0.to_string();
-            let start = utils::parse_content_range(&range).unwrap_or(0);
-
-            if blob_path.exists() {
-                let metadata = blob_path
-                    .metadata()
-                    .map_err(|e| RestError::Unknown(e.to_string()))?;
-                if start > metadata.len() {
-                    return Err(RestError::InvalidArgument(
-                        "Start of Content range parameter is bigger than existing file.".into(),
-                    ));
-                }
-            }
-
-            let mut f = OpenOptions::new()
-                .create(true)
-                .write(true)
-                .open(blob_path)
-                .await
-                .map_err(|e| RestError::Unknown(e.to_string()))?;
-            f.seek(SeekFrom::Start(start))
-                .await
-                .map_err(|e| RestError::Unknown(e.to_string()))?;
-
-            while let Some(chunk) = field.next().await {
-                let data = chunk.map_err(|e| RestError::Unknown(e.to_string()))?;
-                f.write_all(&data)
-                    .await
-                    .map_err(|e| RestError::Unknown(e.to_string()))?;
-            }
-        } else {
-            let mut f = OpenOptions::new()
-                .create(true)
-                .write(true)
-                .open(blob_path)
-                .await
-                .map_err(|e| RestError::Unknown(e.to_string()))?;
-
-            while let Some(chunk) = field.next().await {
-                let data = chunk.map_err(|e| RestError::Unknown(e.to_string()))?;
-                f.write_all(&data)
-                    .await
-                    .map_err(|e| RestError::Unknown(e.to_string()))?;
-            }
-        }
+    let mut start = 0;
+    if let Some(ref range) = range {
+        start = utils::extract_start(range).unwrap_or(0);
     }
 
-    let inner_request = AddBlobRequest {
-        alg: blob_alg.into_inner().alg,
+    let mut f = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .open(blob_path)
+        .await
+        .map_err(|e| RestError::Unknown(e.to_string()))?;
+
+    fcntl::flock(f.as_raw_fd(), FlockArg::LockSharedNonblock)
+        .map_err(|e| RestError::Unknown(e.to_string()))?;
+    let metadata = f
+        .metadata()
+        .await
+        .map_err(|e| RestError::Unknown(e.to_string()))?;
+    if start > metadata.len() {
+        return Err(RestError::InvalidArgument(
+            "The start of content range parameter is bigger than the existing file.".into(),
+        ));
+    }
+    fcntl::flock(f.as_raw_fd(), FlockArg::UnlockNonblock)
+        .map_err(|e| RestError::Unknown(e.to_string()))?;
+
+    fcntl::flock(f.as_raw_fd(), FlockArg::LockExclusiveNonblock)
+        .map_err(|e| RestError::Unknown(e.to_string()))?;
+    while let Some(chunk) = payload.next().await {
+        let data = chunk.map_err(|e| RestError::Unknown(e.to_string()))?;
+
+        f.seek(SeekFrom::Start(start))
+            .await
+            .map_err(|e| RestError::Unknown(e.to_string()))?;
+        f.write_all(&data)
+            .await
+            .map_err(|e| RestError::Unknown(e.to_string()))?;
+
+        start += data.len() as u64;
+    }
+
+    let request = AddBlobRequest {
+        alg: query_param.alg,
         data: vec![],
     };
     let mut request_buf: Vec<u8> =
-        bincode::serialize(&inner_request).map_err(|e| RestError::Unknown(e.to_string()))?;
+        bincode::serialize(&request).map_err(|e| RestError::Unknown(e.to_string()))?;
     let response_buf = service
         .send_recv2(3, &mut request_buf, blob_path)
         .await
@@ -255,7 +238,7 @@ async fn add_blob(
 }
 
 async fn get_blob_size(blob_name: web::Path<String>) -> Result<HttpResponse, RestError> {
-    let blob_name = format!("/tmp/{}", blob_name.into_inner());
+    let blob_name = format!("/run/user/1/{}", *blob_name);
     let blob_path = Path::new(blob_name.as_str());
 
     let mut blob_size = 0;
@@ -269,30 +252,44 @@ async fn get_blob_size(blob_name: web::Path<String>) -> Result<HttpResponse, Res
     Ok(HttpResponse::Ok().json(blob_size))
 }
 
+#[derive(Deserialize)]
+struct StartQueryParam {
+    image_id: String,
+}
+
 async fn start(
-    mut payload: web::Payload,
+    query_param: web::Query<StartQueryParam>,
+    mut payload: actix_multipart::Multipart,
     service: web::Data<ExchangeService>,
 ) -> Result<HttpResponse, RestError> {
-    let mut body = web::BytesMut::new();
-    while let Some(chunk) = payload.next().await {
-        let chunk = chunk.map_err(|e| RestError::Unknown(e.to_string()))?;
-        body.extend_from_slice(&chunk);
+    let mut envs = Vec::new();
+    while let Ok(Some(mut field)) = payload.try_next().await {
+        let mut data = vec![];
+        while let Some(chunk) = field.next().await {
+            data.append(
+                &mut chunk
+                    .map_err(|e| RestError::Unknown(e.to_string()))?
+                    .to_vec(),
+            );
+        }
+        match field.name() {
+            "env" => {
+                let mut v = String::from_utf8(data)
+                    .unwrap_or_default()
+                    .split('\n')
+                    .filter(|s| !s.is_empty())
+                    .map(|s| s.to_string())
+                    .collect();
+                envs.append(&mut v);
+            }
+            _ => continue,
+        }
     }
 
-    let mut data: HashMap<String, Vec<String>> = HashMap::new();
-    for (key, value) in url::form_urlencoded::parse(body.as_ref()) {
-        data.entry(key.into_owned())
-            .or_default()
-            .push(value.into_owned());
-    }
-
-    let image_id = data
-        .remove("image_id")
-        .and_then(|mut v| v.pop())
-        .unwrap_or_default();
-    let envs = data.remove("envs").unwrap_or_default();
-
-    let request = StartRequest { image_id, envs };
+    let request = StartRequest {
+        image_id: query_param.image_id.clone(),
+        envs,
+    };
     let mut request_buf: Vec<u8> =
         bincode::serialize(&request).map_err(|e| RestError::Unknown(e.to_string()))?;
 
@@ -312,12 +309,23 @@ async fn start(
     }
 }
 
+#[derive(Deserialize)]
+struct RestartFormParam {
+    #[serde(default)]
+    timeout: u64,
+}
+
 async fn restart(
-    request: web::Form<RestartRequest>,
+    form_param: web::Form<RestartFormParam>,
+    container_id: web::Path<u32>,
     service: web::Data<ExchangeService>,
 ) -> Result<HttpResponse, RestError> {
+    let request = RestartRequest {
+        container_id: *container_id,
+        timeout: form_param.timeout,
+    };
     let mut request_buf: Vec<u8> =
-        bincode::serialize(&request.into_inner()).map_err(|e| RestError::Unknown(e.to_string()))?;
+        bincode::serialize(&request).map_err(|e| RestError::Unknown(e.to_string()))?;
 
     let response_buf = service
         .send_recv(5, &mut request_buf)
@@ -331,11 +339,23 @@ async fn restart(
     }
 }
 
+#[derive(Deserialize)]
+struct ExecQueryParam {
+    container_id: u32,
+    #[serde(default)]
+    timeout: u64,
+    #[serde(default)]
+    capture_size: u64,
+}
+
 async fn exec(
+    query_param: web::Query<ExecQueryParam>,
     mut payload: actix_multipart::Multipart,
     service: web::Data<ExchangeService>,
 ) -> Result<HttpResponse, RestError> {
-    let mut request = ExecRequest::default();
+    let mut envs = Vec::new();
+    let mut cmds = Vec::new();
+    let mut stdin = Vec::new();
 
     while let Ok(Some(mut field)) = payload.try_next().await {
         let mut data = vec![];
@@ -348,33 +368,38 @@ async fn exec(
         }
 
         match field.name() {
-            "container_id" => {
-                request.container_id = utils::convert_ascii_bytes_to_u32(&data)
-                    .map_err(|e| RestError::InvalidArgument(e.to_string()))?
+            "env" => {
+                let mut v = String::from_utf8(data)
+                    .unwrap_or_default()
+                    .split('\n')
+                    .filter(|s| !s.is_empty())
+                    .map(|s| s.to_string())
+                    .collect();
+                envs.append(&mut v);
             }
-            "command" => {
-                request.command = String::from_utf8(data)
-                    .map_err(|e| RestError::InvalidArgument(e.to_string()))?
+            "cmd" => {
+                let mut v = String::from_utf8(data)
+                    .unwrap_or_default()
+                    .split('\n')
+                    .filter(|s| !s.is_empty())
+                    .map(|s| s.to_string())
+                    .collect();
+                cmds.append(&mut v);
             }
-            "timeout" => {
-                request.timeout = utils::convert_ascii_bytes_to_u64(&data)
-                    .map_err(|e| RestError::InvalidArgument(e.to_string()))?
-            }
-            "arguments" => request.arguments.push(
-                String::from_utf8(data).map_err(|e| RestError::InvalidArgument(e.to_string()))?,
-            ),
-            "envs" => request.envs.push(
-                String::from_utf8(data).map_err(|e| RestError::InvalidArgument(e.to_string()))?,
-            ),
-            "stdin" => request.stdin = data,
-            "capture_size" => {
-                request.capture_size = utils::convert_ascii_bytes_to_u64(&data)
-                    .map_err(|e| RestError::InvalidArgument(e.to_string()))?
-            }
+            "stdin" => stdin = data,
             _ => continue,
         }
     }
 
+    let request = ExecRequest {
+        container_id: query_param.container_id,
+        timeout: query_param.timeout,
+        capture_size: query_param.capture_size,
+        command: cmds.first().unwrap_or(&String::new()).clone(),
+        arguments: cmds.get(1..).map_or(Vec::new(), |v| v.to_vec()),
+        envs,
+        stdin,
+    };
     let mut request_buf: Vec<u8> =
         bincode::serialize(&request).map_err(|e| RestError::Unknown(e.to_string()))?;
 
@@ -394,12 +419,22 @@ async fn exec(
     }
 }
 
+#[derive(Deserialize)]
+struct KillFormParam {
+    signal_num: i32,
+}
+
 async fn kill(
-    request: web::Form<KillRequest>,
+    form_param: web::Form<KillFormParam>,
+    container_id: web::Path<u32>,
     service: web::Data<ExchangeService>,
 ) -> Result<HttpResponse, RestError> {
+    let request = KillRequest {
+        container_id: *container_id,
+        signal_num: form_param.signal_num,
+    };
     let mut request_buf: Vec<u8> =
-        bincode::serialize(&request.into_inner()).map_err(|e| RestError::Unknown(e.to_string()))?;
+        bincode::serialize(&request).map_err(|e| RestError::Unknown(e.to_string()))?;
 
     let response_buf = service
         .send_recv(7, &mut request_buf)
@@ -414,11 +449,17 @@ async fn kill(
 }
 
 async fn inspect(
-    request: web::Query<InspectRequest>,
+    path_param: Option<web::Path<u32>>,
     service: web::Data<ExchangeService>,
 ) -> Result<HttpResponse, RestError> {
+    let request = InspectRequest {
+        container_id: match path_param {
+            Some(id) => *id,
+            None => 0,
+        },
+    };
     let mut request_buf: Vec<u8> =
-        bincode::serialize(&request.into_inner()).map_err(|e| RestError::Unknown(e.to_string()))?;
+        bincode::serialize(&request).map_err(|e| RestError::Unknown(e.to_string()))?;
     let response_buf = service
         .send_recv(8, &mut request_buf)
         .await
@@ -440,7 +481,7 @@ async fn report(
     service: web::Data<ExchangeService>,
 ) -> Result<HttpResponse, RestError> {
     let mut request_buf: Vec<u8> =
-        bincode::serialize(&request.into_inner()).map_err(|e| RestError::Unknown(e.to_string()))?;
+        bincode::serialize(&*request).map_err(|e| RestError::Unknown(e.to_string()))?;
     let response_buf = service
         .send_recv(9, &mut request_buf)
         .await
@@ -520,8 +561,9 @@ pub async fn run_server(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let service = web::Data::new(ExchangeService::new(UnixStream::from_std(stream)?));
 
-    let rsa_key = Rsa::generate(3072)?;
-    let private_key = PKey::from_rsa(rsa_key)?;
+    let ec_group = EcGroup::from_curve_name(Nid::SECP384R1)?;
+    let ec_key = EcKey::generate(&ec_group)?;
+    let pkey = PKey::from_ec_key(ec_key)?;
 
     let mut x509_builder = X509Builder::new()?;
 
@@ -536,13 +578,13 @@ pub async fn run_server(
 
     x509_builder.set_subject_name(&subject_name)?;
     x509_builder.set_issuer_name(&subject_name)?;
-    x509_builder.set_pubkey(&private_key)?;
+    x509_builder.set_pubkey(&pkey)?;
 
     let mut extension = BasicConstraints::new();
     extension.ca();
     x509_builder.append_extension(extension.build()?)?;
 
-    x509_builder.sign(&private_key, MessageDigest::sha384())?;
+    x509_builder.sign(&pkey, MessageDigest::sha384())?;
     let x509 = x509_builder.build();
 
     HttpServer::new(move || {
@@ -557,16 +599,16 @@ pub async fn run_server(
             .route("/api/v1/blob/{name}", web::put().to(add_blob))
             .route("/api/v1/blob/{name}", web::get().to(get_blob_size))
             .route("/api/v1/container/start", web::post().to(start))
-            .route("/api/v1/container/restart", web::post().to(restart))
+            .route("/api/v1/container/{id}/restart", web::post().to(restart))
             .route("/api/v1/container/exec", web::post().to(exec))
-            .route("/api/v1/container/kill", web::post().to(kill))
+            .route("/api/v1/container/{id}/kill", web::post().to(kill))
+            .route("/api/v1/container/{id}/inspect", web::get().to(inspect))
             .route("/api/v1/container/inspect", web::get().to(inspect))
             .route("/api/v1/container/report", web::get().to(report))
     })
-    .workers(10)
     .bind_openssl(format!("0.0.0.0:{}", port), {
         let mut builder = SslAcceptor::mozilla_intermediate(SslMethod::tls())?;
-        builder.set_private_key(&private_key)?;
+        builder.set_private_key(&pkey)?;
         builder.set_certificate(&x509)?;
         builder
     })?

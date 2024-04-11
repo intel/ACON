@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::{image::Image, report};
+use actix_web::http::header::{ContentRange, ContentRangeSpec};
 use anyhow::{anyhow, Result};
 use data_encoding::HEXLOWER;
 use nix::{
@@ -24,7 +25,7 @@ use std::{
     os::unix::io::AsRawFd,
     path::{Path, PathBuf},
     str,
-    sync::atomic::{AtomicUsize, Ordering},
+    sync::atomic::{AtomicU32, Ordering},
 };
 use tar::Archive;
 
@@ -80,7 +81,7 @@ pub const BUFF_SIZE: usize = 0x400;
 pub const MAX_BUFF_SIZE: usize = 0x100000;
 
 // Reserve 1 for the deprivileged process
-static CONTAINER_SERIES: AtomicUsize = AtomicUsize::new(2);
+static CONTAINER_SERIES: AtomicU32 = AtomicU32::new(2);
 
 lazy_static! {
     static ref TOP_SUB_DIR: HashSet<&'static str> = {
@@ -701,43 +702,24 @@ pub fn generate_cid() -> Result<u32> {
     }
 
     let overflow_uid = contents.parse::<u32>()?;
-    let cid = CONTAINER_SERIES.fetch_add(1, Ordering::Relaxed) as u32;
+    let cid = CONTAINER_SERIES.fetch_add(1, Ordering::Relaxed);
     if cid != overflow_uid {
         return Ok(cid);
     }
 
-    Ok(CONTAINER_SERIES.fetch_add(1, Ordering::Relaxed) as u32)
+    Ok(CONTAINER_SERIES.fetch_add(1, Ordering::Relaxed))
 }
 
-pub fn parse_content_range(header: &str) -> Option<u64> {
-    let parts: Vec<&str> = header.split("bytes").collect();
-    if parts.len() != 2 {
-        return None;
+pub fn extract_start(content_range: &ContentRange) -> Option<u64> {
+    if let ContentRange(ContentRangeSpec::Bytes {
+        range: Some((start, _)),
+        ..
+    }) = *content_range
+    {
+        return Some(start);
     }
 
-    let range_parts: Vec<&str> = parts[1].split('/').collect();
-    if range_parts.len() != 2 {
-        return None;
-    }
-
-    let range_bounds: Vec<&str> = range_parts[0].split('-').collect();
-    if range_bounds.len() != 2 {
-        return None;
-    }
-
-    range_bounds[0].trim().parse().ok()
-}
-
-pub fn convert_ascii_bytes_to_u32(bytes: &[u8]) -> Result<u32> {
-    let string = str::from_utf8(bytes)?;
-    let num = string.parse::<u32>()?;
-    Ok(num)
-}
-
-pub fn convert_ascii_bytes_to_u64(bytes: &[u8]) -> Result<u64> {
-    let string = str::from_utf8(bytes)?;
-    let num = string.parse::<u64>()?;
-    Ok(num)
+    None
 }
 
 #[cfg(test)]
