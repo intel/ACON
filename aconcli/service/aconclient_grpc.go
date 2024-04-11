@@ -15,7 +15,7 @@ import (
 )
 
 const (
-	defaultServiceTimeout = 10 * time.Second
+	DefaultServiceTimeout = 10 * time.Second
 )
 
 type AconClientGrpc struct {
@@ -43,7 +43,7 @@ func (c *AconClientGrpc) Close() error {
 }
 
 func (c *AconClientGrpc) AddManifest(manifestPath, sigPath, certPath string) (string, []string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), defaultServiceTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), DefaultServiceTimeout)
 	defer cancel()
 
 	aconJSON, err := os.ReadFile(manifestPath)
@@ -81,7 +81,7 @@ func (c *AconClientGrpc) AddManifest(manifestPath, sigPath, certPath string) (st
 }
 
 func (c *AconClientGrpc) AddBlob(alg uint32, blobpath string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), defaultServiceTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), DefaultServiceTimeout)
 	defer cancel()
 
 	content, err := os.ReadFile(filepath.Clean(blobpath))
@@ -93,7 +93,7 @@ func (c *AconClientGrpc) AddBlob(alg uint32, blobpath string) error {
 }
 
 func (c *AconClientGrpc) Finalize() error {
-	ctx, cancel := context.WithTimeout(context.Background(), defaultServiceTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), DefaultServiceTimeout)
 	defer cancel()
 
 	_, err := c.AconServiceClient.Finalize(ctx, &emptypb.Empty{})
@@ -101,7 +101,7 @@ func (c *AconClientGrpc) Finalize() error {
 }
 
 func (c *AconClientGrpc) Start(imageId string, env []string) (uint32, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), defaultServiceTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), DefaultServiceTimeout)
 	defer cancel()
 
 	r, err := c.AconServiceClient.Start(ctx, &pb.StartRequest{ImageId: imageId, Envs: env})
@@ -112,7 +112,7 @@ func (c *AconClientGrpc) Start(imageId string, env []string) (uint32, error) {
 }
 
 func (c *AconClientGrpc) Kill(cid uint32, signum int32) error {
-	ctx, cancel := context.WithTimeout(context.Background(), defaultServiceTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), DefaultServiceTimeout)
 	defer cancel()
 
 	_, err := c.AconServiceClient.Kill(ctx, &pb.KillRequest{ContainerId: cid, SignalNum: signum})
@@ -120,7 +120,7 @@ func (c *AconClientGrpc) Kill(cid uint32, signum int32) error {
 }
 
 func (c *AconClientGrpc) Restart(cid uint32, timeout uint64) error {
-	ctx, cancel := context.WithTimeout(context.Background(), defaultServiceTimeout+time.Duration(timeout)*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), DefaultServiceTimeout+time.Duration(timeout)*time.Second)
 	defer cancel()
 
 	_, err := c.AconServiceClient.Restart(ctx, &pb.RestartRequest{ContainerId: cid, Timeout: timeout})
@@ -129,7 +129,7 @@ func (c *AconClientGrpc) Restart(cid uint32, timeout uint64) error {
 
 func (c *AconClientGrpc) Invoke(cid uint32, invocation []string,
 	timeout uint64, env []string, datafile string, capture_size uint64) ([]byte, []byte, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), defaultServiceTimeout+time.Duration(timeout)*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), DefaultServiceTimeout+time.Duration(timeout)*time.Second)
 	defer cancel()
 
 	cmd := invocation[0]
@@ -162,7 +162,7 @@ func (c *AconClientGrpc) Invoke(cid uint32, invocation []string,
 }
 
 func (c *AconClientGrpc) Inspect(cid uint32) ([]AconStatus, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), defaultServiceTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), DefaultServiceTimeout)
 	defer cancel()
 
 	r, err := c.AconServiceClient.Inspect(ctx, &pb.InspectRequest{ContainerId: cid})
@@ -186,7 +186,7 @@ func (c *AconClientGrpc) Inspect(cid uint32) ([]AconStatus, error) {
 
 func (c *AconClientGrpc) Report(nonceLo, nonceHi uint64, requestType uint32) (data []byte,
 	mrlog0 []string, mrlog1 []string, mrlog2 []string, mrlog3 []string, attest_data string, e error) {
-	ctx, cancel := context.WithTimeout(context.Background(), defaultServiceTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), DefaultServiceTimeout)
 	defer cancel()
 
 	r, err := c.AconServiceClient.Report(ctx, &pb.ReportRequest{NonceLo: nonceLo, NonceHi: nonceHi, RequestType: requestType})

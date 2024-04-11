@@ -16,38 +16,38 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 )
 
 const (
-	endpointBlob     = "/api/v1/blob"
+	endpointBlob     = "/api/v1/blob/%s?%s=%d"
 	endpointManifest = "/api/v1/manifest"
 	endpointFinalize = "/api/v1/manifest/finalize"
-	endpointStart    = "/api/v1/container/start"
-	endpointExec     = "/api/v1/container/exec"
-	endpointInspect  = "/api/v1/container/inspect"
-	endpointReport   = "/api/v1/container/report"
-	endpointKill     = "/api/v1/container/kill"
-	endpointRestart  = "/api/v1/container/restart"
+	endpointStart    = "/api/v1/container/start?%s"
+	endpointExec     = "/api/v1/container/exec?%s"
+	endpointInspect  = "/api/v1/container/%d/inspect"
+	endpointReport   = "/api/v1/container/report?%s"
+	endpointKill     = "/api/v1/container/%d/kill"
+	endpointRestart  = "/api/v1/container/%d/restart"
 
-	fieldManifest  = "manifest"
-	fieldSig       = "sig"
-	fieldCert      = "cert"
-	fieldImgeId    = "image_id"
-	fieldMissLayer = "missing_layers"
-	fieldAlg       = "alg"
-	fieldBlob      = "data"
-	fieldEnvs      = "envs"
-	fieldConId     = "container_id"
-	fieldTimeout   = "timeout"
-	fieldCommand   = "command"
-	fieldArgs      = "arguments"
-	fieldStdin     = "stdin"
-	fieldCapSize   = "capture_size"
-	fieldSignum    = "signal_num"
-	fieldNonceLow  = "nonce_lo"
-	fieldNonceHigh = "nonce_hi"
-	fieldReqType   = "request_type"
+	fieldManifest    = "manifest"
+	fieldSig         = "sig"
+	fieldCert        = "cert"
+	fieldImgeId      = "image_id"
+	fieldMissLayer   = "missing_layers"
+	fieldAlg         = "alg"
+	fieldBlob        = "data"
+	fieldEnvs        = "envs"
+	fieldContainerID = "container_id"
+	fieldTimeout     = "timeout"
+	fieldCommand     = "cmd"
+	fieldStdin       = "stdin"
+	fieldCapSize     = "capture_size"
+	fieldSignum      = "signal_num"
+	fieldNonceLow    = "nonce_lo"
+	fieldNonceHigh   = "nonce_hi"
+	fieldReqType     = "request_type"
 
 	clientMakeReqErrFmt   = "%s: error make request: %s"
 	clientSendReqErrFmt   = "%s: error send request: %s"
@@ -95,9 +95,9 @@ type AconClientHttp struct {
 }
 
 func customizedVC(s tls.ConnectionState) error {
-	fmt.Println("verifying connection state ...")
 	// TODO: add customized checks here
-	fmt.Println("verification pass")
+	//fmt.Println("verifying connection state ...")
+	//fmt.Println("verification pass")
 	return nil
 }
 
@@ -154,7 +154,7 @@ func OptDialTLSContext(caCertFilePath string) Opt {
 }
 func NewAconHttpConnWithOpts(host string, opts ...Opt) (*AconClientHttp, error) {
 	log.Println("Service: Connecting", host)
-	c := &AconClientHttp{&http.Client{}, host, "http"}
+	c := &AconClientHttp{&http.Client{Timeout: DefaultServiceTimeout}, host, "http"}
 	for _, opt := range opts {
 		if err := opt(c); err != nil {
 			return nil, err
@@ -175,8 +175,8 @@ func processReponse(resp *http.Response) ([]byte, error) {
 	return respBody, nil
 }
 
-func (c *AconClientHttp) makeURL(endpoint string) string {
-	return c.scheme + "://" + c.host + endpoint
+func (c *AconClientHttp) makeURL(endpoint string, params ...any) string {
+	return fmt.Sprintf(c.scheme+"://"+c.host+endpoint, params...)
 }
 
 func multipartFile(w *multipart.Writer, fieldname, filename string) error {
@@ -270,20 +270,18 @@ func (c *AconClientHttp) AddManifest(manifest, sig, cert string) (string, []stri
 
 func (c *AconClientHttp) AddBlob(alg uint32, blobpath string) error {
 	blobpath = filepath.Clean(blobpath)
-	requestURL := fmt.Sprintf("%s/%s?%s=%s", c.makeURL(endpointBlob),
-		filepath.Base(blobpath), fieldAlg, strconv.FormatUint(uint64(alg), 10))
-	body := &bytes.Buffer{}
-	w := multipart.NewWriter(body)
-	if err := multipartFile(w, fieldBlob, blobpath); err != nil {
-		return fmt.Errorf("AddBlob, prepare multipart error: %s", err)
-	}
-	w.Close()
+	requestURL := c.makeURL(endpointBlob, filepath.Base(blobpath), fieldAlg, alg)
 
-	req, err := http.NewRequest(http.MethodPut, requestURL, body)
+	f, err := os.Open(blobpath)
+	if err != nil {
+		return fmt.Errorf("AddBlob, error open blob file: %s", err)
+	}
+	defer f.Close()
+
+	req, err := http.NewRequest(http.MethodPut, requestURL, f)
 	if err != nil {
 		return fmt.Errorf(clientMakeReqErrFmt, "AddBlob", err)
 	}
-	req.Header.Add("Content-Type", w.FormDataContentType())
 
 	resp, err := c.client.Do(req)
 	if err != nil {
@@ -315,14 +313,22 @@ func (c *AconClientHttp) Finalize() error {
 }
 
 func (c *AconClientHttp) Start(imageId string, env []string) (uint32, error) {
-	requestURL := c.makeURL(endpointStart)
 	d := url.Values{}
 	d.Set(fieldImgeId, imageId)
-	for _, e := range env {
-		d.Add(fieldEnvs, e)
-	}
+	requestURL := c.makeURL(endpointStart, d.Encode())
 
-	resp, err := c.client.PostForm(requestURL, d)
+	body := &bytes.Buffer{}
+	w := multipart.NewWriter(body)
+	w.WriteField(fieldEnvs, strings.Join(env, "\n"))
+	w.Close()
+
+	req, err := http.NewRequest(http.MethodPost, requestURL, body)
+	if err != nil {
+		return 0, fmt.Errorf(clientMakeReqErrFmt, "Start", err)
+	}
+	req.Header.Add("Content-Type", w.FormDataContentType())
+
+	resp, err := c.client.Do(req)
 	if err != nil {
 		return 0, fmt.Errorf(clientSendReqErrFmt, "Start", err)
 	}
@@ -338,9 +344,8 @@ func (c *AconClientHttp) Start(imageId string, env []string) (uint32, error) {
 }
 
 func (c *AconClientHttp) Kill(cid uint32, signum int32) error {
-	requestURL := c.makeURL(endpointKill)
+	requestURL := c.makeURL(endpointKill, cid)
 	d := url.Values{}
-	d.Set(fieldConId, strconv.FormatUint(uint64(cid), 10))
 	d.Set(fieldSignum, strconv.FormatInt(int64(signum), 10))
 
 	resp, err := c.client.PostForm(requestURL, d)
@@ -355,9 +360,8 @@ func (c *AconClientHttp) Kill(cid uint32, signum int32) error {
 }
 
 func (c *AconClientHttp) Restart(cid uint32, timeout uint64) error {
-	requestURL := c.makeURL(endpointRestart)
+	requestURL := c.makeURL(endpointRestart, cid)
 	d := url.Values{}
-	d.Set(fieldConId, strconv.FormatUint(uint64(cid), 10))
 	d.Set(fieldTimeout, strconv.FormatUint(timeout, 10))
 
 	resp, err := c.client.PostForm(requestURL, d)
@@ -373,23 +377,22 @@ func (c *AconClientHttp) Restart(cid uint32, timeout uint64) error {
 
 func (c *AconClientHttp) Invoke(cid uint32, invocation []string,
 	timeout uint64, env []string, datafile string, capture_size uint64) ([]byte, []byte, error) {
-	requestURL := c.makeURL(endpointExec)
+	d := url.Values{}
+	d.Set(fieldContainerID, strconv.FormatUint(uint64(cid), 10))
+	d.Set(fieldTimeout, strconv.FormatUint(timeout, 10))
+	d.Set(fieldCapSize, strconv.FormatUint(capture_size, 10))
+	requestURL := c.makeURL(endpointExec, d.Encode())
+
 	body := &bytes.Buffer{}
 	w := multipart.NewWriter(body)
+
 	if datafile != "" {
 		if err := multipartFile(w, fieldStdin, datafile); err != nil {
 			return nil, nil, fmt.Errorf("Invoke, prepare multipart error: %s", err)
 		}
 	}
-	w.WriteField(fieldConId, strconv.FormatUint(uint64(cid), 10))
-	w.WriteField(fieldTimeout, strconv.FormatUint(timeout, 10))
-	w.WriteField(fieldCapSize, strconv.FormatUint(capture_size, 10))
-	for _, arg := range invocation {
-		w.WriteField(fieldCommand, arg)
-	}
-	for _, e := range env {
-		w.WriteField(fieldEnvs, e)
-	}
+	w.WriteField(fieldCommand, strings.Join(invocation, "\n"))
+	w.WriteField(fieldEnvs, strings.Join(env, "\n"))
 	w.Close()
 
 	req, err := http.NewRequest(http.MethodPost, requestURL, body)
@@ -406,6 +409,7 @@ func (c *AconClientHttp) Invoke(cid uint32, invocation []string,
 	if err != nil {
 		return nil, nil, fmt.Errorf(clientProcRespErrFmt, "Invoke", err)
 	}
+
 	r := ExecResponse{}
 	if err = json.Unmarshal(content, &r); err != nil {
 		return nil, nil, fmt.Errorf(clientUnmarshalErrFmt, "Invoke", err)
@@ -415,8 +419,7 @@ func (c *AconClientHttp) Invoke(cid uint32, invocation []string,
 }
 
 func (c *AconClientHttp) Inspect(cid uint32) ([]AconStatus, error) {
-	requestURL := fmt.Sprintf("%s?%s=%s", c.makeURL(endpointInspect),
-		fieldConId, strconv.FormatUint(uint64(cid), 10))
+	requestURL := c.makeURL(endpointInspect, cid)
 	resp, err := c.client.Get(requestURL)
 	if err != nil {
 		return nil, fmt.Errorf(clientSendReqErrFmt, "Inspect", err)
@@ -435,10 +438,12 @@ func (c *AconClientHttp) Inspect(cid uint32) ([]AconStatus, error) {
 
 func (c *AconClientHttp) Report(nonceLo, nonceHi uint64, reqType uint32) (data []byte,
 	mrlog0 []string, mrlog1 []string, mrlog2 []string, mrlog3 []string, attest_data string, e error) {
-	requestURL := fmt.Sprintf("%s?%s=%s&%s=%s&%s=%s", c.makeURL(endpointReport),
-		fieldNonceLow, strconv.FormatUint(nonceLo, 10),
-		fieldNonceHigh, strconv.FormatUint(nonceHi, 10),
-		fieldReqType, strconv.FormatUint(uint64(reqType), 10))
+	d := url.Values{}
+	d.Set(fieldNonceLow, strconv.FormatUint(nonceLo, 10))
+	d.Set(fieldNonceHigh, strconv.FormatUint(nonceHi, 10))
+	d.Set(fieldReqType, strconv.FormatUint(uint64(reqType), 10))
+	requestURL := c.makeURL(endpointReport, d.Encode())
+
 	resp, err := c.client.Get(requestURL)
 	if err != nil {
 		e = fmt.Errorf(clientSendReqErrFmt, "Report", err)
@@ -450,7 +455,7 @@ func (c *AconClientHttp) Report(nonceLo, nonceHi uint64, reqType uint32) (data [
 		return
 	}
 	r := ReportResponse{}
-	if err = json.Unmarshal(content, r); err != nil {
+	if err = json.Unmarshal(content, &r); err != nil {
 		e = fmt.Errorf(clientUnmarshalErrFmt, "Report", err)
 		return
 	} else {

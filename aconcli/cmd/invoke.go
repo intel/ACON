@@ -5,6 +5,7 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"time"
 
 	"aconcli/config"
 	"aconcli/service"
@@ -38,7 +39,9 @@ capital letter.
 }
 
 func invoke(args []string) error {
-	c, err := service.NewAconHttpConnWithOpts(vmConnTarget, service.OptDialTLSContextInsecure())
+	c, err := service.NewAconHttpConnWithOpts(vmConnTarget,
+		service.OptDialTLSContextInsecure(),
+		service.OptTimeout(service.DefaultServiceTimeout+time.Duration(timeout)*time.Second))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Invoke: cannot connect to %s: %v\n", vmConnTarget, err)
 		return err
