@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::{image::Image, report};
-use actix_web::http::header::{ContentRange, ContentRangeSpec};
 use anyhow::{anyhow, Result};
 use data_encoding::HEXLOWER;
 use nix::{
@@ -80,8 +79,11 @@ pub const SHA512: &str = "sha512";
 pub const BUFF_SIZE: usize = 0x400;
 pub const MAX_BUFF_SIZE: usize = 0x100000;
 
+pub const CLIENT_UID: u32 = 1;
+pub const BLOB_DIR: &str = "/run/user/1";
+
 // Reserve 1 for the deprivileged process
-static CONTAINER_SERIES: AtomicU32 = AtomicU32::new(2);
+static CONTAINER_SERIES: AtomicU32 = AtomicU32::new(CLIENT_UID + 1);
 
 lazy_static! {
     static ref TOP_SUB_DIR: HashSet<&'static str> = {
@@ -708,18 +710,6 @@ pub fn generate_cid() -> Result<u32> {
     }
 
     Ok(CONTAINER_SERIES.fetch_add(1, Ordering::Relaxed))
-}
-
-pub fn extract_start(content_range: &ContentRange) -> Option<u64> {
-    if let ContentRange(ContentRangeSpec::Bytes {
-        range: Some((start, _)),
-        ..
-    }) = *content_range
-    {
-        return Some(start);
-    }
-
-    None
 }
 
 #[cfg(test)]

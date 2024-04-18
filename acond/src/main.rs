@@ -11,7 +11,7 @@ use nix::{
     sys::reboot::{self, RebootMode},
     unistd::{self, ForkResult, Gid, Pid, Uid},
 };
-use std::{fs, os::unix::net::UnixStream, path::Path};
+use std::{fs, os::unix::net::UnixStream};
 use tokio::runtime::Builder;
 
 mod config;
@@ -32,17 +32,12 @@ fn start_service() -> Result<(), Box<dyn std::error::Error>> {
     let mut config = Config::new();
     config.parse_cmdline(None)?;
 
-    let gid = Gid::from_raw(1);
-    let uid = Uid::from_raw(1);
     let (pstream, cstream) = UnixStream::pair()?;
 
     match unsafe { unistd::fork() } {
         Ok(ForkResult::Parent { child: _ }) => {
-            let path = Path::new("/run/user").join(format!("{}", uid));
-            fs::create_dir_all(&path)?;
-            unistd::chown(&path, Some(uid), Some(gid))?;
-
             pstream.set_nonblocking(true)?;
+
             let rt = Builder::new_current_thread().enable_all().build()?;
             rt.block_on(server::start_server(pstream, &config))?;
             rt.shutdown_background();
@@ -50,10 +45,17 @@ fn start_service() -> Result<(), Box<dyn std::error::Error>> {
             Ok(())
         }
         Ok(ForkResult::Child) => {
-            cstream.set_nonblocking(true)?;
+            let gid = Gid::from_raw(utils::CLIENT_UID);
+            let uid = Uid::from_raw(utils::CLIENT_UID);
+
+            fs::create_dir_all(utils::BLOB_DIR)?;
+            unistd::chown(utils::BLOB_DIR, Some(uid), Some(gid))?;
+
             unistd::setresgid(gid, gid, gid)?;
             unistd::setresuid(uid, uid, uid)?;
-            prctl::set_name("rpc_server").map_err(|e| anyhow!(e.to_string()))?;
+
+            prctl::set_name("deprivileged_server").map_err(|e| anyhow!(e.to_string()))?;
+            cstream.set_nonblocking(true)?;
 
             let rt = Builder::new_current_thread().enable_all().build()?;
             rt.block_on(restful::run_server(cstream, config.tcp_port))?;

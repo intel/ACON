@@ -11,10 +11,14 @@ use crate::{
     utils,
 };
 use actix_web::{
-    http::{self, StatusCode},
+    http::{
+        self,
+        header::{ContentRange, ContentRangeSpec},
+        StatusCode,
+    },
     web, App, HttpResponse, HttpServer, ResponseError,
 };
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use futures::{StreamExt, TryStreamExt};
 use nix::{
     fcntl::{self, FlockArg},
@@ -44,6 +48,12 @@ use tokio::{
     sync::Mutex,
 };
 use tokio_send_fd::SendFd;
+
+const DEF_HASH_ALG: u32 = 2;
+const DEF_TIMEOUT: u64 = 30;
+const DEF_CAP_SIZE: u64 = 0x20000;
+const ERR_REQ_CONTENT_RANGE: &str = "The start of content range is bigger than the existing file";
+const ERR_RESP_FORMAT: &str = "Server response format error";
 
 #[derive(Debug)]
 enum RestError {
@@ -89,53 +99,30 @@ async fn add_manifest(
     let mut request = AddManifestRequest::default();
 
     while let Ok(Some(mut field)) = payload.try_next().await {
-        let mut data = vec![];
-        while let Some(chunk) = field.next().await {
-            data.append(
-                &mut chunk
-                    .map_err(|e| RestError::Unknown(e.to_string()))?
-                    .to_vec(),
-            );
-        }
-
         match field.name() {
-            "manifest" => request.manifest = data,
-            "sig" => request.signature = data,
-            "cert" => request.certificate = data,
+            "manifest" => request.manifest = read_multipart_data(&mut field).await?,
+            "sig" => request.signature = read_multipart_data(&mut field).await?,
+            "cert" => request.certificate = read_multipart_data(&mut field).await?,
             _ => continue,
         }
     }
 
-    let mut request_buf: Vec<u8> =
+    let send_buf: Vec<u8> =
         bincode::serialize(&request).map_err(|e| RestError::Unknown(e.to_string()))?;
-    let response_buf = service
-        .send_recv(1, &mut request_buf)
-        .await
-        .map_err(|e| RestError::Unknown(e.to_string()))?;
 
-    match response_buf[0] {
-        0 => {
-            let response: AddManifestResponse = bincode::deserialize(&response_buf[1..])
-                .map_err(|e| RestError::Unknown(e.to_string()))?;
-            Ok(HttpResponse::Ok().json(response))
-        }
-        1 => Err(get_rest_error(&response_buf[1..]).map_err(|e| RestError::Unknown(e.to_string()))?),
-        _ => Err(RestError::Unknown("Server response format error".into())),
-    }
+    do_exchange(1, send_buf, None, service, |data| {
+        let response: AddManifestResponse =
+            bincode::deserialize(data).map_err(|e| RestError::Unknown(e.to_string()))?;
+        Ok(HttpResponse::Ok().json(response))
+    })
+    .await
 }
 
 async fn finalize(service: web::Data<ExchangeService>) -> Result<HttpResponse, RestError> {
-    let mut request_buf: Vec<u8> = vec![0; 0];
-    let response_buf = service
-        .send_recv(2, &mut request_buf)
-        .await
-        .map_err(|e| RestError::Unknown(e.to_string()))?;
-
-    match response_buf[0] {
-        0 => Ok(HttpResponse::Ok().finish()),
-        1 => Err(get_rest_error(&response_buf[1..]).map_err(|e| RestError::Unknown(e.to_string()))?),
-        _ => Err(RestError::Unknown("Server response format error".into())),
-    }
+    do_exchange(2, vec![0; 0], None, service, |_| {
+        Ok(HttpResponse::Ok().finish())
+    })
+    .await
 }
 
 async fn get_manifest(
@@ -145,27 +132,25 @@ async fn get_manifest(
     let request = GetManifestRequest {
         image_id: format!("{}/{}/{}", path.0, path.1, path.2),
     };
-    let mut request_buf: Vec<u8> =
+    let send_buf: Vec<u8> =
         bincode::serialize(&request).map_err(|e| RestError::Unknown(e.to_string()))?;
-    let response_buf = service
-        .send_recv(10, &mut request_buf)
-        .await
-        .map_err(|e| RestError::Unknown(e.to_string()))?;
 
-    match response_buf[0] {
-        0 => {
-            let response: GetManifestResponse = bincode::deserialize(&response_buf[1..])
-                .map_err(|e| RestError::Unknown(e.to_string()))?;
-            Ok(HttpResponse::Ok().json(response))
-        }
-        1 => Err(get_rest_error(&response_buf[1..]).map_err(|e| RestError::Unknown(e.to_string()))?),
-        _ => Err(RestError::Unknown("Server response format error".into())),
-    }
+    do_exchange(10, send_buf, None, service, |data| {
+        let response: GetManifestResponse =
+            bincode::deserialize(data).map_err(|e| RestError::Unknown(e.to_string()))?;
+        Ok(HttpResponse::Ok().json(response))
+    })
+    .await
 }
 
 #[derive(Deserialize)]
 struct AddBlobQueryParam {
+    #[serde(default = "set_default_alg")]
     alg: u32,
+}
+
+fn set_default_alg() -> u32 {
+    DEF_HASH_ALG
 }
 
 async fn add_blob(
@@ -175,12 +160,18 @@ async fn add_blob(
     mut payload: web::Payload,
     service: web::Data<ExchangeService>,
 ) -> Result<HttpResponse, RestError> {
-    let blob_name = format!("/run/user/1/{}", *blob_name);
+    let blob_name = format!("{}/{}", utils::BLOB_DIR, *blob_name);
     let blob_path = Path::new(blob_name.as_str());
 
     let mut start = 0;
-    if let Some(ref range) = range {
-        start = utils::extract_start(range).unwrap_or(0);
+    if let Some(content_range) = range {
+        if let ContentRange(ContentRangeSpec::Bytes {
+            range: Some((s, _)),
+            ..
+        }) = *content_range
+        {
+            start = s;
+        }
     }
 
     let mut f = OpenOptions::new()
@@ -190,22 +181,16 @@ async fn add_blob(
         .await
         .map_err(|e| RestError::Unknown(e.to_string()))?;
 
-    fcntl::flock(f.as_raw_fd(), FlockArg::LockSharedNonblock)
+    fcntl::flock(f.as_raw_fd(), FlockArg::LockExclusiveNonblock)
         .map_err(|e| RestError::Unknown(e.to_string()))?;
     let metadata = f
         .metadata()
         .await
         .map_err(|e| RestError::Unknown(e.to_string()))?;
     if start > metadata.len() {
-        return Err(RestError::InvalidArgument(
-            "The start of content range parameter is bigger than the existing file.".into(),
-        ));
+        return Err(RestError::InvalidArgument(ERR_REQ_CONTENT_RANGE.into()));
     }
-    fcntl::flock(f.as_raw_fd(), FlockArg::UnlockNonblock)
-        .map_err(|e| RestError::Unknown(e.to_string()))?;
 
-    fcntl::flock(f.as_raw_fd(), FlockArg::LockExclusiveNonblock)
-        .map_err(|e| RestError::Unknown(e.to_string()))?;
     while let Some(chunk) = payload.next().await {
         let data = chunk.map_err(|e| RestError::Unknown(e.to_string()))?;
 
@@ -223,33 +208,30 @@ async fn add_blob(
         alg: query_param.alg,
         data: vec![],
     };
-    let mut request_buf: Vec<u8> =
+    let send_buf: Vec<u8> =
         bincode::serialize(&request).map_err(|e| RestError::Unknown(e.to_string()))?;
-    let response_buf = service
-        .send_recv2(3, &mut request_buf, blob_path)
-        .await
-        .map_err(|e| RestError::Unknown(e.to_string()))?;
 
-    match response_buf[0] {
-        0 => Ok(HttpResponse::Ok().finish()),
-        1 => Err(get_rest_error(&response_buf[1..]).map_err(|e| RestError::Unknown(e.to_string()))?),
-        _ => Err(RestError::Unknown("Server response format error".into())),
-    }
+    do_exchange(3, send_buf, Some(blob_path), service, |_| {
+        Ok(HttpResponse::Ok().finish())
+    })
+    .await
 }
 
 async fn get_blob_size(blob_name: web::Path<String>) -> Result<HttpResponse, RestError> {
-    let blob_name = format!("/run/user/1/{}", *blob_name);
-    let blob_path = Path::new(blob_name.as_str());
+    let f = OpenOptions::new()
+        .read(true)
+        .open(format!("{}/{}", utils::BLOB_DIR, *blob_name))
+        .await
+        .map_err(|e| RestError::Unknown(e.to_string()))?;
 
-    let mut blob_size = 0;
-    if blob_path.exists() {
-        let metadata = blob_path
-            .metadata()
-            .map_err(|e| RestError::Unknown(e.to_string()))?;
-        blob_size = metadata.len()
-    }
+    fcntl::flock(f.as_raw_fd(), FlockArg::LockSharedNonblock)
+        .map_err(|e| RestError::Unknown(e.to_string()))?;
+    let metadata = f
+        .metadata()
+        .await
+        .map_err(|e| RestError::Unknown(e.to_string()))?;
 
-    Ok(HttpResponse::Ok().json(blob_size))
+    Ok(HttpResponse::Ok().json(metadata.len()))
 }
 
 #[derive(Deserialize)]
@@ -264,24 +246,10 @@ async fn start(
 ) -> Result<HttpResponse, RestError> {
     let mut envs = Vec::new();
     while let Ok(Some(mut field)) = payload.try_next().await {
-        let mut data = vec![];
-        while let Some(chunk) = field.next().await {
-            data.append(
-                &mut chunk
-                    .map_err(|e| RestError::Unknown(e.to_string()))?
-                    .to_vec(),
-            );
-        }
         match field.name() {
-            "env" => {
-                let mut v = String::from_utf8(data)
-                    .unwrap_or_default()
-                    .split('\n')
-                    .filter(|s| !s.is_empty())
-                    .map(|s| s.to_string())
-                    .collect();
-                envs.append(&mut v);
-            }
+            "env" => envs.append(&mut parse_bytes_to_strings(
+                read_multipart_data(&mut field).await?,
+            )),
             _ => continue,
         }
     }
@@ -290,62 +258,56 @@ async fn start(
         image_id: query_param.image_id.clone(),
         envs,
     };
-    let mut request_buf: Vec<u8> =
+    let send_buf: Vec<u8> =
         bincode::serialize(&request).map_err(|e| RestError::Unknown(e.to_string()))?;
 
-    let response_buf = service
-        .send_recv(4, &mut request_buf)
-        .await
-        .map_err(|e| RestError::Unknown(e.to_string()))?;
-
-    match response_buf[0] {
-        0 => {
-            let response: StartResponse = bincode::deserialize(&response_buf[1..])
-                .map_err(|e| RestError::Unknown(e.to_string()))?;
-            Ok(HttpResponse::Ok().json(response))
-        }
-        1 => Err(get_rest_error(&response_buf[1..]).map_err(|e| RestError::Unknown(e.to_string()))?),
-        _ => Err(RestError::Unknown("Server response format error".into())),
-    }
+    do_exchange(4, send_buf, None, service, |data| {
+        let response: StartResponse =
+            bincode::deserialize(data).map_err(|e| RestError::Unknown(e.to_string()))?;
+        Ok(HttpResponse::Ok().json(response))
+    })
+    .await
 }
 
 #[derive(Deserialize)]
-struct RestartFormParam {
-    #[serde(default)]
+struct RestartQueryParam {
+    #[serde(default = "set_default_timeout")]
     timeout: u64,
 }
 
+fn set_default_timeout() -> u64 {
+    DEF_TIMEOUT
+}
+
 async fn restart(
-    form_param: web::Form<RestartFormParam>,
+    query_param: web::Query<RestartQueryParam>,
     container_id: web::Path<u32>,
     service: web::Data<ExchangeService>,
 ) -> Result<HttpResponse, RestError> {
     let request = RestartRequest {
         container_id: *container_id,
-        timeout: form_param.timeout,
+        timeout: query_param.timeout,
     };
-    let mut request_buf: Vec<u8> =
+    let send_buf: Vec<u8> =
         bincode::serialize(&request).map_err(|e| RestError::Unknown(e.to_string()))?;
 
-    let response_buf = service
-        .send_recv(5, &mut request_buf)
-        .await
-        .map_err(|e| RestError::Unknown(e.to_string()))?;
-
-    match response_buf[0] {
-        0 => Ok(HttpResponse::Ok().finish()),
-        1 => Err(get_rest_error(&response_buf[1..]).map_err(|e| RestError::Unknown(e.to_string()))?),
-        _ => Err(RestError::Unknown("Server response format error".into())),
-    }
+    do_exchange(5, send_buf, None, service, |_| {
+        Ok(HttpResponse::Ok().finish())
+    })
+    .await
 }
 
 #[derive(Deserialize)]
 struct ExecQueryParam {
     container_id: u32,
-    #[serde(default)]
+    #[serde(default = "set_default_timeout")]
     timeout: u64,
-    #[serde(default)]
+    #[serde(default = "set_default_capsize")]
     capture_size: u64,
+}
+
+fn set_default_capsize() -> u64 {
+    DEF_CAP_SIZE
 }
 
 async fn exec(
@@ -358,35 +320,14 @@ async fn exec(
     let mut stdin = Vec::new();
 
     while let Ok(Some(mut field)) = payload.try_next().await {
-        let mut data = vec![];
-        while let Some(chunk) = field.next().await {
-            data.append(
-                &mut chunk
-                    .map_err(|e| RestError::Unknown(e.to_string()))?
-                    .to_vec(),
-            );
-        }
-
         match field.name() {
-            "env" => {
-                let mut v = String::from_utf8(data)
-                    .unwrap_or_default()
-                    .split('\n')
-                    .filter(|s| !s.is_empty())
-                    .map(|s| s.to_string())
-                    .collect();
-                envs.append(&mut v);
-            }
-            "cmd" => {
-                let mut v = String::from_utf8(data)
-                    .unwrap_or_default()
-                    .split('\n')
-                    .filter(|s| !s.is_empty())
-                    .map(|s| s.to_string())
-                    .collect();
-                cmds.append(&mut v);
-            }
-            "stdin" => stdin = data,
+            "env" => envs.append(&mut parse_bytes_to_strings(
+                read_multipart_data(&mut field).await?,
+            )),
+            "cmd" => cmds.append(&mut parse_bytes_to_strings(
+                read_multipart_data(&mut field).await?,
+            )),
+            "stdin" => stdin.append(&mut read_multipart_data(&mut field).await?),
             _ => continue,
         }
     }
@@ -400,23 +341,15 @@ async fn exec(
         envs,
         stdin,
     };
-    let mut request_buf: Vec<u8> =
+    let send_buf: Vec<u8> =
         bincode::serialize(&request).map_err(|e| RestError::Unknown(e.to_string()))?;
 
-    let response_buf = service
-        .send_recv(6, &mut request_buf)
-        .await
-        .map_err(|e| RestError::Unknown(e.to_string()))?;
-
-    match response_buf[0] {
-        0 => {
-            let response: ExecResponse = bincode::deserialize(&response_buf[1..])
-                .map_err(|e| RestError::Unknown(e.to_string()))?;
-            Ok(HttpResponse::Ok().json(response))
-        }
-        1 => Err(get_rest_error(&response_buf[1..]).map_err(|e| RestError::Unknown(e.to_string()))?),
-        _ => Err(RestError::Unknown("Server response format error".into())),
-    }
+    do_exchange(6, send_buf, None, service, |data| {
+        let response: ExecResponse =
+            bincode::deserialize(data).map_err(|e| RestError::Unknown(e.to_string()))?;
+        Ok(HttpResponse::Ok().json(response))
+    })
+    .await
 }
 
 #[derive(Deserialize)]
@@ -433,19 +366,13 @@ async fn kill(
         container_id: *container_id,
         signal_num: form_param.signal_num,
     };
-    let mut request_buf: Vec<u8> =
+    let send_buf: Vec<u8> =
         bincode::serialize(&request).map_err(|e| RestError::Unknown(e.to_string()))?;
 
-    let response_buf = service
-        .send_recv(7, &mut request_buf)
-        .await
-        .map_err(|e| RestError::Unknown(e.to_string()))?;
-
-    match response_buf[0] {
-        0 => Ok(HttpResponse::Ok().finish()),
-        1 => Err(get_rest_error(&response_buf[1..]).map_err(|e| RestError::Unknown(e.to_string()))?),
-        _ => Err(RestError::Unknown("Server response format error".into())),
-    }
+    do_exchange(7, send_buf, None, service, |_| {
+        Ok(HttpResponse::Ok().finish())
+    })
+    .await
 }
 
 async fn inspect(
@@ -458,45 +385,91 @@ async fn inspect(
             None => 0,
         },
     };
-    let mut request_buf: Vec<u8> =
+    let send_buf: Vec<u8> =
         bincode::serialize(&request).map_err(|e| RestError::Unknown(e.to_string()))?;
-    let response_buf = service
-        .send_recv(8, &mut request_buf)
-        .await
-        .map_err(|e| RestError::Unknown(e.to_string()))?;
 
-    match response_buf[0] {
-        0 => {
-            let response: InspectResponse = bincode::deserialize(&response_buf[1..])
-                .map_err(|e| RestError::Unknown(e.to_string()))?;
-            Ok(HttpResponse::Ok().json(response))
-        }
-        1 => Err(get_rest_error(&response_buf[1..]).map_err(|e| RestError::Unknown(e.to_string()))?),
-        _ => Err(RestError::Unknown("Server response format error".into())),
-    }
+    do_exchange(8, send_buf, None, service, |data| {
+        let response: InspectResponse =
+            bincode::deserialize(data).map_err(|e| RestError::Unknown(e.to_string()))?;
+        Ok(HttpResponse::Ok().json(response))
+    })
+    .await
 }
 
 async fn report(
     request: web::Query<ReportRequest>,
     service: web::Data<ExchangeService>,
 ) -> Result<HttpResponse, RestError> {
-    let mut request_buf: Vec<u8> =
+    let send_buf: Vec<u8> =
         bincode::serialize(&*request).map_err(|e| RestError::Unknown(e.to_string()))?;
-    let response_buf = service
-        .send_recv(9, &mut request_buf)
+
+    do_exchange(9, send_buf, None, service, |data| {
+        let response: ReportResponse =
+            bincode::deserialize(data).map_err(|e| RestError::Unknown(e.to_string()))?;
+        Ok(HttpResponse::Ok().json(response))
+    })
+    .await
+}
+
+async fn do_exchange<F>(
+    command: u8,
+    mut buf: Vec<u8>,
+    path: Option<&Path>,
+    service: web::Data<ExchangeService>,
+    on_success: F,
+) -> Result<HttpResponse, RestError>
+where
+    F: Fn(&[u8]) -> Result<HttpResponse, RestError>,
+{
+    buf.insert(0, command);
+    let mut send_buf = (buf.len() as u32).to_ne_bytes().to_vec();
+    send_buf.append(&mut buf);
+
+    let recv_buf = service
+        .do_exchange(&send_buf, path)
         .await
         .map_err(|e| RestError::Unknown(e.to_string()))?;
 
-    match response_buf[0] {
-        0 => {
-            let response: ReportResponse = bincode::deserialize(&response_buf[1..])
-                .map_err(|e| RestError::Unknown(e.to_string()))?;
-            Ok(HttpResponse::Ok().json(response))
-        }
-        1 => Err(get_rest_error(&response_buf[1..]).map_err(|e| RestError::Unknown(e.to_string()))?),
-        _ => Err(RestError::Unknown("Server response format error".into())),
+    match recv_buf.first() {
+        Some(0) => on_success(recv_buf.get(1..).unwrap_or(&[])),
+        Some(1) => Err(convert_error(recv_buf.get(1..).unwrap_or(&[]))
+            .map_err(|e| RestError::Unknown(e.to_string()))?),
+        _ => Err(RestError::Unknown(ERR_RESP_FORMAT.into())),
     }
 }
+
+async fn read_multipart_data(field: &mut actix_multipart::Field) -> Result<Vec<u8>, RestError> {
+    let mut data = vec![];
+    while let Some(chunk) = field.next().await {
+        data.append(
+            &mut chunk
+                .map_err(|e| RestError::Unknown(e.to_string()))?
+                .to_vec(),
+        );
+    }
+
+    Ok(data)
+}
+
+fn parse_bytes_to_strings(data: Vec<u8>) -> Vec<String> {
+    String::from_utf8(data)
+        .unwrap_or_default()
+        .split('\n')
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .collect()
+}
+
+fn convert_error(buf: &[u8]) -> Result<RestError> {
+    let error: AcondError = bincode::deserialize(buf)?;
+    match error.code {
+        Code::Unknown => Ok(RestError::Unknown(error.message)),
+        Code::InvalidArgument => Ok(RestError::InvalidArgument(error.message)),
+        Code::DeadlineExceeded => Ok(RestError::DeadlineExceeded(error.message)),
+        Code::PermissionDenied => Ok(RestError::PermissionDenied(error.message)),
+    }
+}
+
 struct ExchangeService {
     stream: Arc<Mutex<UnixStream>>,
 }
@@ -508,50 +481,19 @@ impl ExchangeService {
         }
     }
 
-    async fn send_recv(&self, command: u8, buf: &mut Vec<u8>) -> Result<Vec<u8>> {
-        buf.insert(0, command);
+    async fn do_exchange(&self, buf: &[u8], path: Option<&Path>) -> Result<Vec<u8>> {
+        acond_io::write_async_lock(self.stream.clone(), buf, buf.len()).await?;
 
-        let mut send_buf = (buf.len() as u32).to_ne_bytes().to_vec();
-        send_buf.append(buf);
-        acond_io::write_async_lock(self.stream.clone(), &send_buf, send_buf.len()).await?;
-
-        let recv_buf = acond_io::read_async_lock(self.stream.clone()).await?;
-        if recv_buf.is_empty() {
-            return Err(anyhow!(utils::ERR_UNEXPECTED));
-        }
-        Ok(recv_buf)
-    }
-
-    async fn send_recv2(&self, command: u8, buf: &mut Vec<u8>, path: &Path) -> Result<Vec<u8>> {
-        buf.insert(0, command);
-
-        let mut send_buf = (buf.len() as u32).to_ne_bytes().to_vec();
-        send_buf.append(buf);
-        acond_io::write_async_lock(self.stream.clone(), &send_buf, send_buf.len()).await?;
-        {
+        if path.is_some() {
             let ref_stream = self.stream.clone();
             let stream = ref_stream.lock().await;
-            let file = File::open(path).await?;
+            let file = File::open(path.unwrap()).await?;
             stream.send_fd(file.as_raw_fd()).await?;
             unistd::close(file.as_raw_fd())?;
-            unistd::unlink(path)?;
+            unistd::unlink(path.unwrap())?;
         }
 
-        let recv_buf = acond_io::read_async_lock(self.stream.clone()).await?;
-        if recv_buf.is_empty() {
-            return Err(anyhow!(utils::ERR_UNEXPECTED));
-        }
-        Ok(recv_buf)
-    }
-}
-
-fn get_rest_error(buf: &[u8]) -> Result<RestError> {
-    let error: AcondError = bincode::deserialize(buf)?;
-    match error.code {
-        Code::Unknown => Ok(RestError::Unknown(error.message)),
-        Code::InvalidArgument => Ok(RestError::InvalidArgument(error.message)),
-        Code::DeadlineExceeded => Ok(RestError::DeadlineExceeded(error.message)),
-        Code::PermissionDenied => Ok(RestError::PermissionDenied(error.message)),
+        acond_io::read_async_lock(self.stream.clone()).await
     }
 }
 
