@@ -33,7 +33,6 @@ use openssl::{
     ssl::{SslAcceptor, SslMethod},
     x509::{extension::BasicConstraints, X509Builder, X509NameBuilder},
 };
-use serde::Deserialize;
 use std::{
     fmt,
     io::SeekFrom,
@@ -143,7 +142,7 @@ async fn get_manifest(
     .await
 }
 
-#[derive(Deserialize)]
+#[derive(serde::Deserialize)]
 struct AddBlobQueryParam {
     #[serde(default = "set_default_alg")]
     alg: u32,
@@ -234,7 +233,7 @@ async fn get_blob_size(blob_name: web::Path<String>) -> Result<HttpResponse, Res
     Ok(HttpResponse::Ok().json(metadata.len()))
 }
 
-#[derive(Deserialize)]
+#[derive(serde::Deserialize)]
 struct StartQueryParam {
     image_id: String,
 }
@@ -269,7 +268,7 @@ async fn start(
     .await
 }
 
-#[derive(Deserialize)]
+#[derive(serde::Deserialize)]
 struct RestartQueryParam {
     #[serde(default = "set_default_timeout")]
     timeout: u64,
@@ -297,7 +296,7 @@ async fn restart(
     .await
 }
 
-#[derive(Deserialize)]
+#[derive(serde::Deserialize)]
 struct ExecQueryParam {
     container_id: u32,
     #[serde(default = "set_default_timeout")]
@@ -352,7 +351,7 @@ async fn exec(
     .await
 }
 
-#[derive(Deserialize)]
+#[derive(serde::Deserialize)]
 struct KillFormParam {
     signal_num: i32,
 }
@@ -432,8 +431,16 @@ where
 
     match recv_buf.first() {
         Some(0) => on_success(recv_buf.get(1..).unwrap_or(&[])),
-        Some(1) => Err(convert_error(recv_buf.get(1..).unwrap_or(&[]))
-            .map_err(|e| RestError::Unknown(e.to_string()))?),
+        Some(1) => {
+            let error: AcondError = bincode::deserialize(recv_buf.get(1..).unwrap_or(&[]))
+                .map_err(|e| RestError::Unknown(e.to_string()))?;
+            match error.code {
+                Code::Unknown => Err(RestError::Unknown(error.message)),
+                Code::InvalidArgument => Err(RestError::InvalidArgument(error.message)),
+                Code::DeadlineExceeded => Err(RestError::DeadlineExceeded(error.message)),
+                Code::PermissionDenied => Err(RestError::PermissionDenied(error.message)),
+            }
+        }
         _ => Err(RestError::Unknown(ERR_RESP_FORMAT.into())),
     }
 }
@@ -458,16 +465,6 @@ fn parse_bytes_to_strings(data: Vec<u8>) -> Vec<String> {
         .filter(|s| !s.is_empty())
         .map(|s| s.to_string())
         .collect()
-}
-
-fn convert_error(buf: &[u8]) -> Result<RestError> {
-    let error: AcondError = bincode::deserialize(buf)?;
-    match error.code {
-        Code::Unknown => Ok(RestError::Unknown(error.message)),
-        Code::InvalidArgument => Ok(RestError::InvalidArgument(error.message)),
-        Code::DeadlineExceeded => Ok(RestError::DeadlineExceeded(error.message)),
-        Code::PermissionDenied => Ok(RestError::PermissionDenied(error.message)),
-    }
 }
 
 struct ExchangeService {
