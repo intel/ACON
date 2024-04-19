@@ -481,13 +481,13 @@ impl ExchangeService {
     async fn do_exchange(&self, buf: &[u8], path: Option<&Path>) -> Result<Vec<u8>> {
         acond_io::write_async_lock(self.stream.clone(), buf, buf.len()).await?;
 
-        if path.is_some() {
+        if let Some(path) = path {
             let ref_stream = self.stream.clone();
             let stream = ref_stream.lock().await;
-            let file = File::open(path.unwrap()).await?;
+            let file = File::open(path).await?;
             stream.send_fd(file.as_raw_fd()).await?;
             unistd::close(file.as_raw_fd())?;
-            unistd::unlink(path.unwrap())?;
+            unistd::unlink(path)?;
         }
 
         acond_io::read_async_lock(self.stream.clone()).await

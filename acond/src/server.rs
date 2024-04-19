@@ -209,18 +209,18 @@ async fn invoke_rpc(
     request_buf: Vec<u8>,
     stream: &UnixStream,
 ) -> Result<Vec<u8>, AcondError> {
-    match request_buf[0] {
-        1 => {
+    match request_buf.first() {
+        Some(1) => {
             let request = bincode::deserialize(&request_buf[1..])
                 .map_err(|_| AcondError::unknown(utils::ERR_UNEXPECTED))?;
             let response = service.add_manifest(&request).await?;
             bincode::serialize(&response).map_err(|_| AcondError::unknown(utils::ERR_UNEXPECTED))
         }
-        2 => {
+        Some(2) => {
             service.finalize().await?;
             Ok(vec![0; 0])
         }
-        3 => {
+        Some(3) => {
             let fd = stream
                 .recv_fd()
                 .await
@@ -234,7 +234,7 @@ async fn invoke_rpc(
             let data_addr = unsafe {
                 mman::mmap(
                     None,
-                    NonZeroUsize::new(len).unwrap(),
+                    NonZeroUsize::new(len).ok_or(AcondError::unknown(utils::ERR_UNEXPECTED))?,
                     ProtFlags::PROT_READ,
                     MapFlags::MAP_PRIVATE,
                     fd,
@@ -257,43 +257,43 @@ async fn invoke_rpc(
 
             Ok(vec![0; 0])
         }
-        4 => {
+        Some(4) => {
             let request = bincode::deserialize(&request_buf[1..])
                 .map_err(|_| AcondError::unknown(utils::ERR_UNEXPECTED))?;
             let response = service.start(&request).await?;
             bincode::serialize(&response).map_err(|_| AcondError::unknown(utils::ERR_UNEXPECTED))
         }
-        5 => {
+        Some(5) => {
             let request = bincode::deserialize(&request_buf[1..])
                 .map_err(|_| AcondError::unknown(utils::ERR_UNEXPECTED))?;
             service.restart(&request).await?;
             Ok(vec![0; 0])
         }
-        6 => {
+        Some(6) => {
             let request = bincode::deserialize(&request_buf[1..])
                 .map_err(|_| AcondError::unknown(utils::ERR_UNEXPECTED))?;
             let response = service.exec(&request).await?;
             bincode::serialize(&response).map_err(|_| AcondError::unknown(utils::ERR_UNEXPECTED))
         }
-        7 => {
+        Some(7) => {
             let request = bincode::deserialize(&request_buf[1..])
                 .map_err(|_| AcondError::unknown(utils::ERR_UNEXPECTED))?;
             service.kill(&request).await?;
             Ok(vec![0; 0])
         }
-        8 => {
+        Some(8) => {
             let request = bincode::deserialize(&request_buf[1..])
                 .map_err(|_| AcondError::unknown(utils::ERR_UNEXPECTED))?;
             let response = service.inspect(&request).await?;
             bincode::serialize(&response).map_err(|_| AcondError::unknown(utils::ERR_UNEXPECTED))
         }
-        9 => {
+        Some(9) => {
             let request = bincode::deserialize(&request_buf[1..])
                 .map_err(|_| AcondError::unknown(utils::ERR_UNEXPECTED))?;
             let response = service.report(&request).await?;
             bincode::serialize(&response).map_err(|_| AcondError::unknown(utils::ERR_UNEXPECTED))
         }
-        10 => {
+        Some(10) => {
             let request = bincode::deserialize(&request_buf[1..])
                 .map_err(|_| AcondError::unknown(utils::ERR_UNEXPECTED))?;
             let response = service.get_manifest(&request).await?;
@@ -654,19 +654,13 @@ impl AconService {
                     ));
                 }
 
-                let sig = if !image.manifest.signals.is_empty() {
-                    let s = image.manifest.signals[0];
-                    if s.abs() == libc::SIGTERM || s.abs() == libc::SIGKILL {
-                        s
-                    } else {
+                let sig = match image.manifest.signals.first() {
+                    Some(s) if s.abs() == libc::SIGTERM || s.abs() == libc::SIGKILL => *s,
+                    _ => {
                         return Err(AcondError::permission_denied(
                             utils::ERR_RPC_CONTAINER_NOT_ALLOW_RESTART,
-                        ));
+                        ))
                     }
-                } else {
-                    return Err(AcondError::permission_denied(
-                        utils::ERR_RPC_CONTAINER_NOT_ALLOW_RESTART,
-                    ));
                 };
 
                 unsafe {

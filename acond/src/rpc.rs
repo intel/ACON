@@ -5,7 +5,7 @@ mod grpc {
     tonic::include_proto!("acon.grpc");
 }
 
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use grpc::acon_service_server::{AconService, AconServiceServer};
 use grpc::{
     AddBlobRequest, AddManifestRequest, AddManifestResponse, ExecRequest, ExecResponse,
@@ -44,45 +44,52 @@ impl TDAconService {
         }
     }
 
-    async fn send_recv(&self, command: u8, buf: &mut Vec<u8>) -> Result<Vec<u8>> {
-        buf.insert(0, command);
-
-        let mut send_buf = (buf.len() as u32).to_ne_bytes().to_vec();
-        send_buf.append(buf);
-        acond_io::write_async_lock(self.stream.clone(), &send_buf, send_buf.len()).await?;
-
-        let recv_buf = acond_io::read_async_lock(self.stream.clone()).await?;
-        if recv_buf.is_empty() {
-            return Err(anyhow!(utils::ERR_UNEXPECTED));
-        }
-        Ok(recv_buf)
-    }
-
-    async fn send_recv2(
+    async fn do_exchange(
         &self,
         command: u8,
-        buf: &mut Vec<u8>,
-        file: &NamedTempFile,
-    ) -> Result<Vec<u8>> {
+        mut buf: Vec<u8>,
+        file: Option<&NamedTempFile>,
+    ) -> Result<Vec<u8>, Status> {
         buf.insert(0, command);
 
         let mut send_buf = (buf.len() as u32).to_ne_bytes().to_vec();
-        send_buf.append(buf);
-        acond_io::write_async_lock(self.stream.clone(), &send_buf, send_buf.len()).await?;
+        send_buf.append(&mut buf);
+        acond_io::write_async_lock(self.stream.clone(), &send_buf, send_buf.len())
+            .await
+            .map_err(|_| Status::unknown(utils::ERR_UNEXPECTED))?;
 
-        {
+        if let Some(f) = file {
             let ref_stream = self.stream.clone();
             let stream = ref_stream.lock().await;
-            stream.send_fd(file.as_raw_fd()).await?;
-            unistd::close(file.as_raw_fd()).map_err(|_| Status::unknown(utils::ERR_UNEXPECTED))?;
-            unistd::unlink(file.path()).map_err(|_| Status::unknown(utils::ERR_UNEXPECTED))?;
+            stream.send_fd(f.as_raw_fd()).await?;
+            unistd::close(f.as_raw_fd()).map_err(|_| Status::unknown(utils::ERR_UNEXPECTED))?;
+            unistd::unlink(f.path()).map_err(|_| Status::unknown(utils::ERR_UNEXPECTED))?;
         }
 
-        let recv_buf = acond_io::read_async_lock(self.stream.clone()).await?;
-        if recv_buf.is_empty() {
-            return Err(anyhow!(utils::ERR_UNEXPECTED));
+        let recv_buf = acond_io::read_async_lock(self.stream.clone())
+            .await
+            .map_err(|_| Status::unknown(utils::ERR_UNEXPECTED))?;
+
+        match recv_buf.first() {
+            Some(0) => Ok(recv_buf.get(1..).map_or(Vec::new(), |v| v.to_vec())),
+            Some(1) => {
+                let error: AcondError = bincode::deserialize(recv_buf.get(1..).unwrap_or(&[]))
+                    .map_err(|_| Status::unknown(utils::ERR_UNEXPECTED))?;
+                match error.code {
+                    Code::Unknown => Err(Status::new(tonic::Code::Unknown, error.message)),
+                    Code::InvalidArgument => {
+                        Err(Status::new(tonic::Code::InvalidArgument, error.message))
+                    }
+                    Code::DeadlineExceeded => {
+                        Err(Status::new(tonic::Code::DeadlineExceeded, error.message))
+                    }
+                    Code::PermissionDenied => {
+                        Err(Status::new(tonic::Code::PermissionDenied, error.message))
+                    }
+                }
+            }
+            _ => Err(Status::unknown(utils::ERR_UNEXPECTED)),
         }
-        Ok(recv_buf)
     }
 }
 
@@ -93,44 +100,19 @@ impl AconService for TDAconService {
         &self,
         request: Request<AddManifestRequest>,
     ) -> Result<Response<AddManifestResponse>, Status> {
-        let mut request_buf: Vec<u8> = bincode::serialize(request.get_ref())
-            .map_err(|_| Status::unknown(utils::ERR_UNEXPECTED))?;
-        let response_buf = self
-            .send_recv(1, &mut request_buf)
-            .await
+        let send_buf: Vec<u8> = bincode::serialize(request.get_ref())
             .map_err(|_| Status::unknown(utils::ERR_UNEXPECTED))?;
 
-        match response_buf[0] {
-            0 => {
-                let response = bincode::deserialize(&response_buf[1..])
-                    .map_err(|_| Status::unknown(utils::ERR_UNEXPECTED))?;
-                Ok(Response::new(response))
-            }
-            1 => {
-                let status = get_status(&response_buf[1..])
-                    .map_err(|_| Status::unknown(utils::ERR_UNEXPECTED))?;
-                Err(status)
-            }
-            _ => Err(Status::unknown(utils::ERR_UNEXPECTED)),
-        }
+        let recv_buf = self.do_exchange(1, send_buf, None).await?;
+
+        Ok(Response::new(
+            bincode::deserialize(&recv_buf).map_err(|_| Status::unknown(utils::ERR_UNEXPECTED))?,
+        ))
     }
 
     async fn finalize(&self, _: Request<()>) -> Result<Response<()>, Status> {
-        let mut request_buf: Vec<u8> = vec![0; 0];
-        let response_buf = self
-            .send_recv(2, &mut request_buf)
-            .await
-            .map_err(|_| Status::unknown(utils::ERR_UNEXPECTED))?;
-
-        match response_buf[0] {
-            0 => Ok(Response::new(())),
-            1 => {
-                let status = get_status(&response_buf[1..])
-                    .map_err(|_| Status::unknown(utils::ERR_UNEXPECTED))?;
-                Err(status)
-            }
-            _ => Err(Status::unknown(utils::ERR_UNEXPECTED)),
-        }
+        self.do_exchange(2, vec![0; 0], None).await?;
+        Ok(Response::new(()))
     }
 
     async fn add_blob(&self, request: Request<AddBlobRequest>) -> Result<Response<()>, Status> {
@@ -138,203 +120,103 @@ impl AconService for TDAconService {
         file.write_all(&request.get_ref().data)
             .map_err(|_| Status::unknown(utils::ERR_UNEXPECTED))?;
 
-        let inner_request = AddBlobRequest {
+        let send_buf: Vec<u8> = bincode::serialize(&AddBlobRequest {
             alg: request.get_ref().alg,
             data: vec![],
-        };
-        let mut request_buf: Vec<u8> = bincode::serialize(&inner_request)
-            .map_err(|_| Status::unknown(utils::ERR_UNEXPECTED))?;
-        let response_buf = self
-            .send_recv2(3, &mut request_buf, &file)
-            .await
-            .map_err(|_| Status::unknown(utils::ERR_UNEXPECTED))?;
+        })
+        .map_err(|_| Status::unknown(utils::ERR_UNEXPECTED))?;
 
-        match response_buf[0] {
-            0 => Ok(Response::new(())),
-            1 => {
-                let status = get_status(&response_buf[1..])
-                    .map_err(|_| Status::unknown(utils::ERR_UNEXPECTED))?;
-                Err(status)
-            }
-            _ => Err(Status::unknown(utils::ERR_UNEXPECTED)),
-        }
+        self.do_exchange(3, send_buf, Some(&file)).await?;
+
+        Ok(Response::new(()))
     }
 
     async fn start(
         &self,
         request: Request<StartRequest>,
     ) -> Result<Response<StartResponse>, Status> {
-        let mut request_buf: Vec<u8> = bincode::serialize(request.get_ref())
-            .map_err(|_| Status::unknown(utils::ERR_UNEXPECTED))?;
-        let response_buf = self
-            .send_recv(4, &mut request_buf)
-            .await
+        let send_buf: Vec<u8> = bincode::serialize(request.get_ref())
             .map_err(|_| Status::unknown(utils::ERR_UNEXPECTED))?;
 
-        match response_buf[0] {
-            0 => {
-                let response = bincode::deserialize(&response_buf[1..])
-                    .map_err(|_| Status::unknown(utils::ERR_UNEXPECTED))?;
-                Ok(Response::new(response))
-            }
-            1 => {
-                let status = get_status(&response_buf[1..])
-                    .map_err(|_| Status::unknown(utils::ERR_UNEXPECTED))?;
-                Err(status)
-            }
-            _ => Err(Status::unknown(utils::ERR_UNEXPECTED)),
-        }
+        let recv_buf = self.do_exchange(4, send_buf, None).await?;
+
+        Ok(Response::new(
+            bincode::deserialize(&recv_buf).map_err(|_| Status::unknown(utils::ERR_UNEXPECTED))?,
+        ))
     }
 
     async fn restart(&self, request: Request<RestartRequest>) -> Result<Response<()>, Status> {
-        let mut request_buf: Vec<u8> = bincode::serialize(request.get_ref())
-            .map_err(|_| Status::unknown(utils::ERR_UNEXPECTED))?;
-        let response_buf = self
-            .send_recv(5, &mut request_buf)
-            .await
+        let send_buf: Vec<u8> = bincode::serialize(request.get_ref())
             .map_err(|_| Status::unknown(utils::ERR_UNEXPECTED))?;
 
-        match response_buf[0] {
-            0 => Ok(Response::new(())),
-            1 => {
-                let status = get_status(&response_buf[1..])
-                    .map_err(|_| Status::unknown(utils::ERR_UNEXPECTED))?;
-                Err(status)
-            }
-            _ => Err(Status::unknown(utils::ERR_UNEXPECTED)),
-        }
+        let recv_buf = self.do_exchange(5, send_buf, None).await?;
+
+        Ok(Response::new(
+            bincode::deserialize(&recv_buf).map_err(|_| Status::unknown(utils::ERR_UNEXPECTED))?,
+        ))
     }
 
     async fn exec(&self, request: Request<ExecRequest>) -> Result<Response<ExecResponse>, Status> {
-        let mut request_buf: Vec<u8> = bincode::serialize(request.get_ref())
-            .map_err(|_| Status::unknown(utils::ERR_UNEXPECTED))?;
-        let response_buf = self
-            .send_recv(6, &mut request_buf)
-            .await
+        let send_buf: Vec<u8> = bincode::serialize(request.get_ref())
             .map_err(|_| Status::unknown(utils::ERR_UNEXPECTED))?;
 
-        match response_buf[0] {
-            0 => {
-                let response = bincode::deserialize(&response_buf[1..])
-                    .map_err(|_| Status::unknown(utils::ERR_UNEXPECTED))?;
-                Ok(Response::new(response))
-            }
-            1 => {
-                let status = get_status(&response_buf[1..])
-                    .map_err(|_| Status::unknown(utils::ERR_UNEXPECTED))?;
-                Err(status)
-            }
-            _ => Err(Status::unknown(utils::ERR_UNEXPECTED)),
-        }
+        let recv_buf = self.do_exchange(6, send_buf, None).await?;
+
+        Ok(Response::new(
+            bincode::deserialize(&recv_buf).map_err(|_| Status::unknown(utils::ERR_UNEXPECTED))?,
+        ))
     }
 
     async fn kill(&self, request: Request<KillRequest>) -> Result<Response<()>, Status> {
-        let mut request_buf: Vec<u8> = bincode::serialize(request.get_ref())
-            .map_err(|_| Status::unknown(utils::ERR_UNEXPECTED))?;
-        let response_buf = self
-            .send_recv(7, &mut request_buf)
-            .await
+        let send_buf: Vec<u8> = bincode::serialize(request.get_ref())
             .map_err(|_| Status::unknown(utils::ERR_UNEXPECTED))?;
 
-        match response_buf[0] {
-            0 => Ok(Response::new(())),
-            1 => {
-                let status = get_status(&response_buf[1..])
-                    .map_err(|_| Status::unknown(utils::ERR_UNEXPECTED))?;
-                Err(status)
-            }
-            _ => Err(Status::unknown(utils::ERR_UNEXPECTED)),
-        }
+        self.do_exchange(7, send_buf, None).await?;
+
+        Ok(Response::new(()))
     }
 
     async fn inspect(
         &self,
         request: Request<InspectRequest>,
     ) -> Result<Response<InspectResponse>, Status> {
-        let mut request_buf: Vec<u8> = bincode::serialize(request.get_ref())
-            .map_err(|_| Status::unknown(utils::ERR_UNEXPECTED))?;
-        let response_buf = self
-            .send_recv(8, &mut request_buf)
-            .await
+        let send_buf: Vec<u8> = bincode::serialize(request.get_ref())
             .map_err(|_| Status::unknown(utils::ERR_UNEXPECTED))?;
 
-        match response_buf[0] {
-            0 => {
-                let response = bincode::deserialize(&response_buf[1..])
-                    .map_err(|_| Status::unknown(utils::ERR_UNEXPECTED))?;
-                Ok(Response::new(response))
-            }
-            1 => {
-                let status = get_status(&response_buf[1..])
-                    .map_err(|_| Status::unknown(utils::ERR_UNEXPECTED))?;
-                Err(status)
-            }
-            _ => Err(Status::unknown(utils::ERR_UNEXPECTED)),
-        }
+        let recv_buf = self.do_exchange(8, send_buf, None).await?;
+
+        Ok(Response::new(
+            bincode::deserialize(&recv_buf).map_err(|_| Status::unknown(utils::ERR_UNEXPECTED))?,
+        ))
     }
 
     async fn report(
         &self,
         request: Request<ReportRequest>,
     ) -> Result<Response<ReportResponse>, Status> {
-        let mut request_buf: Vec<u8> = bincode::serialize(request.get_ref())
-            .map_err(|_| Status::unknown(utils::ERR_UNEXPECTED))?;
-        let response_buf = self
-            .send_recv(9, &mut request_buf)
-            .await
+        let send_buf: Vec<u8> = bincode::serialize(request.get_ref())
             .map_err(|_| Status::unknown(utils::ERR_UNEXPECTED))?;
 
-        match response_buf[0] {
-            0 => {
-                let response = bincode::deserialize(&response_buf[1..])
-                    .map_err(|_| Status::unknown(utils::ERR_UNEXPECTED))?;
-                Ok(Response::new(response))
-            }
-            1 => {
-                let status = get_status(&response_buf[1..])
-                    .map_err(|_| Status::unknown(utils::ERR_UNEXPECTED))?;
-                Err(status)
-            }
-            _ => Err(Status::unknown(utils::ERR_UNEXPECTED)),
-        }
+        let recv_buf = self.do_exchange(9, send_buf, None).await?;
+
+        Ok(Response::new(
+            bincode::deserialize(&recv_buf).map_err(|_| Status::unknown(utils::ERR_UNEXPECTED))?,
+        ))
     }
 
     async fn get_manifest(
         &self,
         request: Request<GetManifestRequest>,
     ) -> Result<Response<GetManifestResponse>, Status> {
-        let mut request_buf: Vec<u8> = bincode::serialize(request.get_ref())
-            .map_err(|_| Status::unknown(utils::ERR_UNEXPECTED))?;
-        let response_buf = self
-            .send_recv(10, &mut request_buf)
-            .await
+        let send_buf: Vec<u8> = bincode::serialize(request.get_ref())
             .map_err(|_| Status::unknown(utils::ERR_UNEXPECTED))?;
 
-        match response_buf[0] {
-            0 => {
-                let response = bincode::deserialize(&response_buf[1..])
-                    .map_err(|_| Status::unknown(utils::ERR_UNEXPECTED))?;
-                Ok(Response::new(response))
-            }
-            1 => {
-                let status = get_status(&response_buf[1..])
-                    .map_err(|_| Status::unknown(utils::ERR_UNEXPECTED))?;
-                Err(status)
-            }
-            _ => Err(Status::unknown(utils::ERR_UNEXPECTED)),
-        }
+        let recv_buf = self.do_exchange(10, send_buf, None).await?;
+
+        Ok(Response::new(
+            bincode::deserialize(&recv_buf).map_err(|_| Status::unknown(utils::ERR_UNEXPECTED))?,
+        ))
     }
-}
-
-fn get_status(buf: &[u8]) -> Result<Status> {
-    let error: AcondError = bincode::deserialize(buf)?;
-    let code = match error.code {
-        Code::Unknown => tonic::Code::Unknown,
-        Code::InvalidArgument => tonic::Code::InvalidArgument,
-        Code::DeadlineExceeded => tonic::Code::DeadlineExceeded,
-        Code::PermissionDenied => tonic::Code::PermissionDenied,
-    };
-    Ok(Status::new(code, error.message))
 }
 
 pub async fn run_vsock_server(

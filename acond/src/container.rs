@@ -124,6 +124,10 @@ struct ForkArgs {
 
 impl Container {
     pub async fn start(image: &Image, envs: &Vec<String>) -> Result<Self> {
+        if image.manifest.entrypoint.len() == 0 {
+            return Err(anyhow!(utils::ERR_RPC_INVALID_ENTRYPOINT));
+        }
+
         let container_id = utils::generate_cid()?;
         let overlay_fs = utils::setup_container_dtree(image, container_id)?;
 
@@ -145,8 +149,8 @@ impl Container {
                 uids: uids.clone(),
             }),
             exec_args: ExecArgs {
-                args: image.manifest.entrypoint.to_vec(),
-                envs: env_vars.to_vec(),
+                args: image.manifest.entrypoint.clone(),
+                envs: env_vars.clone(),
             },
             stdin: None,
             stdout: None,
@@ -183,11 +187,11 @@ impl Container {
                 overlay_fs,
                 writable_fs: image.manifest.writable_fs,
                 work_dir: image.manifest.working_dir.clone(),
-                uids: self.uids.clone().unwrap(),
+                uids: self.uids.clone().unwrap_or_default(),
             }),
             exec_args: ExecArgs {
-                args: image.manifest.entrypoint.to_vec(),
-                envs: self.envs.clone().unwrap(),
+                args: image.manifest.entrypoint.clone(),
+                envs: self.envs.clone().unwrap_or_default(),
             },
             stdin: None,
             stdout: None,
