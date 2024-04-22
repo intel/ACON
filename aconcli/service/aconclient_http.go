@@ -29,7 +29,7 @@ const (
 	endpointInspect  = "/api/v1/container/%d/inspect"
 	endpointReport   = "/api/v1/container/report?%s"
 	endpointKill     = "/api/v1/container/%d/kill"
-	endpointRestart  = "/api/v1/container/%d/restart"
+	endpointRestart  = "/api/v1/container/%d/restart?%s"
 
 	fieldManifest    = "manifest"
 	fieldSig         = "sig"
@@ -94,13 +94,6 @@ type AconClientHttp struct {
 	scheme string
 }
 
-func customizedVC(s tls.ConnectionState) error {
-	// TODO: add customized checks here
-	//fmt.Println("verifying connection state ...")
-	//fmt.Println("verification pass")
-	return nil
-}
-
 type Opt func(*AconClientHttp) error
 
 func OptTimeout(timeout time.Duration) Opt {
@@ -116,7 +109,9 @@ func OptDialTLSContextInsecure() Opt {
 			DialTLSContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 				conn, err := tls.Dial(network, addr, &tls.Config{
 					InsecureSkipVerify: true,
-					VerifyConnection:   customizedVC,
+					VerifyConnection: func(tls.ConnectionState) error {
+						return nil
+					},
 				})
 				if err != nil {
 					return nil, err
@@ -360,11 +355,11 @@ func (c *AconClientHttp) Kill(cid uint32, signum int32) error {
 }
 
 func (c *AconClientHttp) Restart(cid uint32, timeout uint64) error {
-	requestURL := c.makeURL(endpointRestart, cid)
 	d := url.Values{}
 	d.Set(fieldTimeout, strconv.FormatUint(timeout, 10))
+	requestURL := c.makeURL(endpointRestart, cid, d.Encode())
 
-	resp, err := c.client.PostForm(requestURL, d)
+	resp, err := c.client.Post(requestURL, "application/x-www-form-urlencoded", nil)
 	if err != nil {
 		return fmt.Errorf(clientSendReqErrFmt, "Restart", err)
 	}
