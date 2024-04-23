@@ -25,29 +25,28 @@ const (
 	endpointManifest = "/api/v1/manifest"
 	endpointFinalize = "/api/v1/manifest/finalize"
 	endpointStart    = "/api/v1/container/start?%s"
-	endpointExec     = "/api/v1/container/exec?%s"
+	endpointExec     = "/api/v1/container/%d/exec?%s"
 	endpointInspect  = "/api/v1/container/%d/inspect"
 	endpointReport   = "/api/v1/container/report?%s"
 	endpointKill     = "/api/v1/container/%d/kill"
 	endpointRestart  = "/api/v1/container/%d/restart?%s"
 
-	fieldManifest    = "manifest"
-	fieldSig         = "sig"
-	fieldCert        = "cert"
-	fieldImgeId      = "image_id"
-	fieldMissLayer   = "missing_layers"
-	fieldAlg         = "alg"
-	fieldBlob        = "data"
-	fieldEnvs        = "envs"
-	fieldContainerID = "container_id"
-	fieldTimeout     = "timeout"
-	fieldCommand     = "cmd"
-	fieldStdin       = "stdin"
-	fieldCapSize     = "capture_size"
-	fieldSignum      = "signal_num"
-	fieldNonceLow    = "nonce_lo"
-	fieldNonceHigh   = "nonce_hi"
-	fieldReqType     = "request_type"
+	fieldManifest  = "manifest"
+	fieldSig       = "sig"
+	fieldCert      = "cert"
+	fieldImgeId    = "image_id"
+	fieldMissLayer = "missing_layers"
+	fieldAlg       = "alg"
+	fieldBlob      = "data"
+	fieldEnvs      = "env"
+	fieldTimeout   = "timeout"
+	fieldCommand   = "cmd"
+	fieldStdin     = "stdin"
+	fieldCapSize   = "capture_size"
+	fieldSignum    = "signal_num"
+	fieldNonceLow  = "nonce_lo"
+	fieldNonceHigh = "nonce_hi"
+	fieldReqType   = "request_type"
 
 	clientMakeReqErrFmt   = "%s: error make request: %s"
 	clientSendReqErrFmt   = "%s: error send request: %s"
@@ -373,10 +372,9 @@ func (c *AconClientHttp) Restart(cid uint32, timeout uint64) error {
 func (c *AconClientHttp) Invoke(cid uint32, invocation []string,
 	timeout uint64, env []string, datafile string, capture_size uint64) ([]byte, []byte, error) {
 	d := url.Values{}
-	d.Set(fieldContainerID, strconv.FormatUint(uint64(cid), 10))
 	d.Set(fieldTimeout, strconv.FormatUint(timeout, 10))
 	d.Set(fieldCapSize, strconv.FormatUint(capture_size, 10))
-	requestURL := c.makeURL(endpointExec, d.Encode())
+	requestURL := c.makeURL(endpointExec, cid, d.Encode())
 
 	body := &bytes.Buffer{}
 	w := multipart.NewWriter(body)

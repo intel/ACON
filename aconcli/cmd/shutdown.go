@@ -44,7 +44,7 @@ func stopAcon(c service.AconClient, id uint32) error {
 	fmt.Fprintf(os.Stderr, "cannot invoke 'Stop': %v\n", err)
 
 	// invoke 'Kill' if 'Stop' fails
-	_, _, err = c.Invoke(id, []string{"Kill", "-HUP", "1"}, 5, nil, "", config.DefaultCapSize)
+	_, _, err = c.Invoke(id, []string{"Kill", "-TERM", "1"}, 5, nil, "", config.DefaultCapSize)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "cannot invoke 'Kill': %v\n", err)
 	}
