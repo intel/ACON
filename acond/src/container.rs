@@ -124,7 +124,7 @@ struct ForkArgs {
 
 impl Container {
     pub async fn start(image: &Image, envs: &Vec<String>) -> Result<Self> {
-        if image.manifest.entrypoint.len() == 0 {
+        if image.manifest.entrypoint.is_empty() {
             return Err(anyhow!(utils::ERR_RPC_INVALID_ENTRYPOINT));
         }
 

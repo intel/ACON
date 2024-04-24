@@ -298,7 +298,6 @@ async fn restart(
 
 #[derive(serde::Deserialize)]
 struct ExecQueryParam {
-    container_id: u32,
     #[serde(default = "set_default_timeout")]
     timeout: u64,
     #[serde(default = "set_default_capsize")]
@@ -311,6 +310,7 @@ fn set_default_capsize() -> u64 {
 
 async fn exec(
     query_param: web::Query<ExecQueryParam>,
+    container_id: web::Path<u32>,
     mut payload: actix_multipart::Multipart,
     service: web::Data<ExchangeService>,
 ) -> Result<HttpResponse, RestError> {
@@ -332,7 +332,7 @@ async fn exec(
     }
 
     let request = ExecRequest {
-        container_id: query_param.container_id,
+        container_id: *container_id,
         timeout: query_param.timeout,
         capture_size: query_param.capture_size,
         command: cmds.first().unwrap_or(&String::new()).clone(),
@@ -539,7 +539,7 @@ pub async fn run_server(
             .route("/api/v1/blob/{name}", web::get().to(get_blob_size))
             .route("/api/v1/container/start", web::post().to(start))
             .route("/api/v1/container/{id}/restart", web::post().to(restart))
-            .route("/api/v1/container/exec", web::post().to(exec))
+            .route("/api/v1/container/{id}/exec", web::post().to(exec))
             .route("/api/v1/container/{id}/kill", web::post().to(kill))
             .route("/api/v1/container/{id}/inspect", web::get().to(inspect))
             .route("/api/v1/container/inspect", web::get().to(inspect))
