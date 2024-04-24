@@ -44,7 +44,6 @@ pub const ERR_RPC_CONTAINER_TERMINATED: &str = "Container terminated";
 pub const ERR_RPC_CONTAINER_RESTART_TIMEOUT: &str = "Timeout restarting container";
 pub const ERR_RPC_CONTAINER_NOT_ALLOW_RESTART: &str = "Restarting container not allowed";
 pub const ERR_RPC_CONTAINER_NOT_ALLOW_KILL: &str = "Signal not allowed";
-pub const ERR_RPC_NO_IMAGES: &str = "No images in current TD";
 pub const ERR_RPC_INVALID_LPOLICY_FORMAT: &str = "Invalid launch policy format";
 pub const ERR_RPC_INVALID_MALIAS_FORMAT: &str = "Invalid manifest alias format";
 pub const ERR_RPC_INVALID_ENTRYPOINT: &str = "Invalid entrypoint";

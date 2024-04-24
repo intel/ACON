@@ -870,12 +870,6 @@ impl AconService {
     }
 
     async fn report(&self, request: &ReportRequest) -> Result<ReportResponse, AcondError> {
-        let ref_pod = self.pod.clone();
-        let pod = ref_pod.read().await;
-        if pod.images.is_empty() {
-            return Err(AcondError::unknown(utils::ERR_RPC_NO_IMAGES));
-        }
-
         let nonce_hi = request.nonce_hi;
         let nonce_lo = request.nonce_lo;
 
@@ -886,13 +880,15 @@ impl AconService {
         mrlog.insert(
             3,
             MrLog {
-                logs: utils::get_measurement_rtmr3()
-                    .map_err(|e| AcondError::unknown(e.to_string()))?,
+                logs: utils::get_measurement_rtmr3().unwrap_or_default(),
             },
         );
 
         let (requestor_nonce, acond_nonce) = utils::get_nounces(nonce_hi, nonce_lo)
             .map_err(|e| AcondError::unknown(e.to_string()))?;
+
+        let ref_pod = self.pod.clone();
+        let pod = ref_pod.read().await;
 
         let attestation_data = pod
             .get_attestation_data(requestor_nonce, acond_nonce, None)
