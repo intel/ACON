@@ -115,7 +115,9 @@ impl AconService {
         let ref_pod = self.pod.clone();
         let mut pod = ref_pod.write().await;
 
-        let container = pod.get_container_mut(&uid).unwrap();
+        let container = pod
+            .get_container_mut(&uid)
+            .ok_or(anyhow!(utils::ERR_RPC_INVALID_CONTAINER_ID))?;
         container.attest_data = AttestDataValue::DataValue { dtype, data };
 
         Ok(())

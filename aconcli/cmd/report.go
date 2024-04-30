@@ -97,12 +97,11 @@ ACON TDs/VMs and ACON containers running in them.
 }
 
 func getReport(args []string) error {
-	c, err := service.NewAconConnection(vmConnTarget)
+	c, err := service.NewAconHttpConnWithOpts(vmConnTarget, service.OptDialTLSContextInsecure())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Report: cannot connect to %s: %v\n", vmConnTarget, err)
 		return err
 	}
-	defer c.Close()
 
 	var nl uint64
 	var nh uint64
@@ -140,7 +139,7 @@ func getReport(args []string) error {
 	} else {
 		requestType = 0
 	}
-	data, _, _, _, mrlog3, attest_data, err := service.Report(c, nl, nh, requestType)
+	data, _, _, _, mrlog3, attest_data, err := c.Report(nl, nh, requestType)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Report: cannot call 'report' service: %v\n", err)
 		return err

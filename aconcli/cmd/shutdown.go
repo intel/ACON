@@ -35,16 +35,16 @@ ACON TDs/VMs and ACON containers running in them.
 	},
 }
 
-func stopAcon(c *service.AconClient, id uint32) error {
+func stopAcon(c service.AconClient, id uint32) error {
 	// try invoke 'Stop' first
-	_, _, err := service.Invoke(c, id, []string{"Stop"}, 5, nil, nil, config.DefaultCapSize)
+	_, _, err := c.Invoke(id, []string{"Stop"}, 5, nil, "", config.DefaultCapSize)
 	if err == nil {
 		return nil
 	}
 	fmt.Fprintf(os.Stderr, "cannot invoke 'Stop': %v\n", err)
 
 	// invoke 'Kill' if 'Stop' fails
-	_, _, err = service.Invoke(c, id, []string{"Kill", "-HUP", "1"}, 5, nil, nil, config.DefaultCapSize)
+	_, _, err = c.Invoke(id, []string{"Kill", "-TERM", "1"}, 5, nil, "", config.DefaultCapSize)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "cannot invoke 'Kill': %v\n", err)
 	}
@@ -53,11 +53,10 @@ func stopAcon(c *service.AconClient, id uint32) error {
 }
 
 func stopAconInVM(conn string, ids []uint32) error {
-	c, err := service.NewAconConnection(conn)
+	c, err := service.NewAconHttpConnWithOpts(conn, service.OptDialTLSContextInsecure())
 	if err != nil {
 		return fmt.Errorf("cannot connect to %s: %v\n", conn, err)
 	}
-	defer c.Close()
 
 	partialComplete := false
 	for _, id := range ids {

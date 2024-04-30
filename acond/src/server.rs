@@ -1,17 +1,8 @@
 // Copyright (C) 2023 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 
-mod grpc {
-    tonic::include_proto!("acon.grpc");
-}
-
 use anyhow::{anyhow, Result};
 use futures::future;
-use grpc::{
-    AddBlobRequest, AddManifestRequest, AddManifestResponse, ContainerInfo, ExecRequest,
-    ExecResponse, GetManifestRequest, GetManifestResponse, InspectRequest, InspectResponse,
-    KillRequest, MrLog, ReportRequest, ReportResponse, RestartRequest, StartRequest, StartResponse,
-};
 use nix::{
     errno::Errno,
     sys::{
@@ -218,18 +209,18 @@ async fn invoke_rpc(
     request_buf: Vec<u8>,
     stream: &UnixStream,
 ) -> Result<Vec<u8>, AcondError> {
-    match request_buf[0] {
-        1 => {
+    match request_buf.first() {
+        Some(1) => {
             let request = bincode::deserialize(&request_buf[1..])
                 .map_err(|_| AcondError::unknown(utils::ERR_UNEXPECTED))?;
             let response = service.add_manifest(&request).await?;
             bincode::serialize(&response).map_err(|_| AcondError::unknown(utils::ERR_UNEXPECTED))
         }
-        2 => {
+        Some(2) => {
             service.finalize().await?;
             Ok(vec![0; 0])
         }
-        3 => {
+        Some(3) => {
             let fd = stream
                 .recv_fd()
                 .await
@@ -243,7 +234,7 @@ async fn invoke_rpc(
             let data_addr = unsafe {
                 mman::mmap(
                     None,
-                    NonZeroUsize::new(len).unwrap(),
+                    NonZeroUsize::new(len).ok_or(AcondError::unknown(utils::ERR_UNEXPECTED))?,
                     ProtFlags::PROT_READ,
                     MapFlags::MAP_PRIVATE,
                     fd,
@@ -266,43 +257,43 @@ async fn invoke_rpc(
 
             Ok(vec![0; 0])
         }
-        4 => {
+        Some(4) => {
             let request = bincode::deserialize(&request_buf[1..])
                 .map_err(|_| AcondError::unknown(utils::ERR_UNEXPECTED))?;
             let response = service.start(&request).await?;
             bincode::serialize(&response).map_err(|_| AcondError::unknown(utils::ERR_UNEXPECTED))
         }
-        5 => {
+        Some(5) => {
             let request = bincode::deserialize(&request_buf[1..])
                 .map_err(|_| AcondError::unknown(utils::ERR_UNEXPECTED))?;
             service.restart(&request).await?;
             Ok(vec![0; 0])
         }
-        6 => {
+        Some(6) => {
             let request = bincode::deserialize(&request_buf[1..])
                 .map_err(|_| AcondError::unknown(utils::ERR_UNEXPECTED))?;
             let response = service.exec(&request).await?;
             bincode::serialize(&response).map_err(|_| AcondError::unknown(utils::ERR_UNEXPECTED))
         }
-        7 => {
+        Some(7) => {
             let request = bincode::deserialize(&request_buf[1..])
                 .map_err(|_| AcondError::unknown(utils::ERR_UNEXPECTED))?;
             service.kill(&request).await?;
             Ok(vec![0; 0])
         }
-        8 => {
+        Some(8) => {
             let request = bincode::deserialize(&request_buf[1..])
                 .map_err(|_| AcondError::unknown(utils::ERR_UNEXPECTED))?;
             let response = service.inspect(&request).await?;
             bincode::serialize(&response).map_err(|_| AcondError::unknown(utils::ERR_UNEXPECTED))
         }
-        9 => {
+        Some(9) => {
             let request = bincode::deserialize(&request_buf[1..])
                 .map_err(|_| AcondError::unknown(utils::ERR_UNEXPECTED))?;
             let response = service.report(&request).await?;
             bincode::serialize(&response).map_err(|_| AcondError::unknown(utils::ERR_UNEXPECTED))
         }
-        10 => {
+        Some(10) => {
             let request = bincode::deserialize(&request_buf[1..])
                 .map_err(|_| AcondError::unknown(utils::ERR_UNEXPECTED))?;
             let response = service.get_manifest(&request).await?;
@@ -330,8 +321,115 @@ fn format_error(err: AcondError) -> Vec<u8> {
     error
 }
 
-struct AconService {
-    pod: Arc<RwLock<Pod>>,
+#[derive(Serialize, Deserialize, Default)]
+pub struct AddManifestRequest {
+    pub manifest: Vec<u8>,
+    pub signature: Vec<u8>,
+    pub certificate: Vec<u8>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct AddManifestResponse {
+    pub image_id: String,
+    pub missing_layers: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct AddBlobRequest {
+    // 00000001 sha256
+    // 00000010 sha384
+    // 00000100 sha512
+    pub alg: u32,
+    pub data: Vec<u8>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct StartRequest {
+    pub image_id: String,
+    pub envs: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct StartResponse {
+    pub container_id: u32,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct RestartRequest {
+    pub container_id: u32,
+    pub timeout: u64,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct ExecRequest {
+    pub container_id: u32,
+    pub command: String,
+    pub timeout: u64,
+    pub arguments: Vec<String>,
+    pub envs: Vec<String>,
+    pub stdin: Vec<u8>,
+    pub capture_size: u64,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct ExecResponse {
+    pub stdout: Vec<u8>,
+    pub stderr: Vec<u8>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct KillRequest {
+    pub container_id: u32,
+    pub signal_num: i32,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct InspectRequest {
+    pub container_id: u32,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct InspectResponse {
+    pub info: Vec<ContainerInfo>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct ContainerInfo {
+    pub container_id: u32,
+    pub state: u32,
+    pub wstatus: i32,
+    pub image_id: String,
+    pub exe_path: String,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct ReportRequest {
+    pub nonce_lo: u64,
+    pub nonce_hi: u64,
+    pub request_type: u32, // 0 is report and 1 is quote
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct MrLog {
+    pub logs: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct ReportResponse {
+    pub data: Vec<u8>,
+    pub mrlog: HashMap<u32, MrLog>,
+    pub attestation_data: String,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct GetManifestRequest {
+    pub image_id: String,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct GetManifestResponse {
+    pub manifest: String,
+    pub certificate: Vec<u8>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -373,12 +471,16 @@ impl AcondError {
     }
 }
 
+struct AconService {
+    pod: Arc<RwLock<Pod>>,
+}
+
 impl AconService {
     async fn add_manifest(
         &self,
         request: &AddManifestRequest,
     ) -> Result<AddManifestResponse, AcondError> {
-        let manifest_bytes = request.manifest.as_bytes();
+        let manifest_bytes = request.manifest.as_slice();
         let signature_bytes = request.signature.as_slice();
         let signer_bytes = request.certificate.as_slice();
 
@@ -552,19 +654,13 @@ impl AconService {
                     ));
                 }
 
-                let sig = if !image.manifest.signals.is_empty() {
-                    let s = image.manifest.signals[0];
-                    if s.abs() == libc::SIGTERM || s.abs() == libc::SIGKILL {
-                        s
-                    } else {
+                let sig = match image.manifest.signals.first() {
+                    Some(s) if s.abs() == libc::SIGTERM || s.abs() == libc::SIGKILL => *s,
+                    _ => {
                         return Err(AcondError::permission_denied(
                             utils::ERR_RPC_CONTAINER_NOT_ALLOW_RESTART,
-                        ));
+                        ))
                     }
-                } else {
-                    return Err(AcondError::permission_denied(
-                        utils::ERR_RPC_CONTAINER_NOT_ALLOW_RESTART,
-                    ));
                 };
 
                 unsafe {
@@ -588,15 +684,13 @@ impl AconService {
         };
 
         if let Some(notifier) = exit_notifier {
-            loop {
-                tokio::select! {
-                    _ = time::sleep(Duration::from_secs(timeout)) => {
-                        return Err(AcondError::deadline_exceeded(
-                            utils::ERR_RPC_CONTAINER_RESTART_TIMEOUT,
-                        ));
-                    }
-                    _ = notifier.notified() => break,
+            tokio::select! {
+                _ = time::sleep(Duration::from_secs(timeout)) => {
+                    return Err(AcondError::deadline_exceeded(
+                        utils::ERR_RPC_CONTAINER_RESTART_TIMEOUT,
+                    ));
                 }
+                _ = notifier.notified() => {}
             }
         }
 
@@ -776,12 +870,6 @@ impl AconService {
     }
 
     async fn report(&self, request: &ReportRequest) -> Result<ReportResponse, AcondError> {
-        let ref_pod = self.pod.clone();
-        let pod = ref_pod.read().await;
-        if pod.images.is_empty() {
-            return Err(AcondError::unknown(utils::ERR_RPC_NO_IMAGES));
-        }
-
         let nonce_hi = request.nonce_hi;
         let nonce_lo = request.nonce_lo;
 
@@ -792,13 +880,15 @@ impl AconService {
         mrlog.insert(
             3,
             MrLog {
-                logs: utils::get_measurement_rtmr3()
-                    .map_err(|e| AcondError::unknown(e.to_string()))?,
+                logs: utils::get_measurement_rtmr3().unwrap_or_default(),
             },
         );
 
         let (requestor_nonce, acond_nonce) = utils::get_nounces(nonce_hi, nonce_lo)
             .map_err(|e| AcondError::unknown(e.to_string()))?;
+
+        let ref_pod = self.pod.clone();
+        let pod = ref_pod.read().await;
 
         let attestation_data = pod
             .get_attestation_data(requestor_nonce, acond_nonce, None)

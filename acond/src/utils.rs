@@ -23,7 +23,8 @@ use std::{
     os::unix::fs as unixfs,
     os::unix::io::AsRawFd,
     path::{Path, PathBuf},
-    sync::atomic::{AtomicUsize, Ordering},
+    str,
+    sync::atomic::{AtomicU32, Ordering},
 };
 use tar::Archive;
 
@@ -43,14 +44,14 @@ pub const ERR_RPC_CONTAINER_TERMINATED: &str = "Container terminated";
 pub const ERR_RPC_CONTAINER_RESTART_TIMEOUT: &str = "Timeout restarting container";
 pub const ERR_RPC_CONTAINER_NOT_ALLOW_RESTART: &str = "Restarting container not allowed";
 pub const ERR_RPC_CONTAINER_NOT_ALLOW_KILL: &str = "Signal not allowed";
-pub const ERR_RPC_NO_IMAGES: &str = "No images in current TD";
 pub const ERR_RPC_INVALID_LPOLICY_FORMAT: &str = "Invalid launch policy format";
 pub const ERR_RPC_INVALID_MALIAS_FORMAT: &str = "Invalid manifest alias format";
+pub const ERR_RPC_INVALID_ENTRYPOINT: &str = "Invalid entrypoint";
 pub const ERR_RPC_INVALID_REQUEST_TYPE: &str = "Invalid request type";
 #[cfg(not(feature = "interactive"))]
 pub const ERR_RPC_INVALID_TIMEOUT: &str = "Invalid timeout";
 pub const ERR_RPC_BUFFER_EXCEED: &str = "Stdin buffer size exceeds capture size";
-pub const ERR_RPC_PRIVATE_ENTRYPOINT: &str = "Private entry point";
+pub const ERR_RPC_PRIVATE_ENTRYPOINT: &str = "Private entrypoint";
 pub const ERR_RPC_SYSTEM_ERROR: &str = "System error, errno: {}";
 pub const ERR_IPC_INVALID_REQUEST: &str = "Invalid structure format";
 pub const ERR_IPC_NOT_SUPPORTED: &str = "Request not supported";
@@ -78,8 +79,11 @@ pub const SHA512: &str = "sha512";
 pub const BUFF_SIZE: usize = 0x400;
 pub const MAX_BUFF_SIZE: usize = 0x100000;
 
+pub const CLIENT_UID: u32 = 1;
+pub const BLOB_DIR: &str = "/run/user/1";
+
 // Reserve 1 for the deprivileged process
-static CONTAINER_SERIES: AtomicUsize = AtomicUsize::new(2);
+static CONTAINER_SERIES: AtomicU32 = AtomicU32::new(CLIENT_UID + 1);
 
 lazy_static! {
     static ref TOP_SUB_DIR: HashSet<&'static str> = {
@@ -321,7 +325,7 @@ pub fn setup_container_dtree(image: &Image, container_id: u32) -> Result<String>
     let top_path = setup_top_dtree(&container_path)?;
 
     let root_path = Path::new(&container_path).join(ROOTFS_DIR);
-    fs::create_dir_all(&root_path)?;
+    fs::create_dir_all(root_path)?;
 
     let mut image_dirs: Vec<PathBuf> = vec![];
     let image_path = Path::new(&container_path).join(IMAGE_DIR).join(IMAGE_LAYER);
@@ -551,7 +555,7 @@ pub fn get_container_info(container_id: u32, container_pid: Pid) -> Result<(u32,
     let exe = link.strip_prefix(prefix)?;
 
     let reader = BufReader::new(File::open(format!("/proc/{}/status", container_pid))?);
-    for (_, l) in reader.lines().enumerate() {
+    for l in reader.lines() {
         let line = l?;
 
         if line.starts_with("Name:") {
@@ -603,7 +607,7 @@ pub fn is_init_process(pid: i32) -> Result<bool> {
     let file = File::open(format!("/proc/{}/status", pid))?;
     let reader = BufReader::new(file);
 
-    for (_, line) in reader.lines().enumerate() {
+    for line in reader.lines() {
         let line = match line {
             Ok(l) => l,
             Err(_) => {
@@ -700,12 +704,12 @@ pub fn generate_cid() -> Result<u32> {
     }
 
     let overflow_uid = contents.parse::<u32>()?;
-    let cid = CONTAINER_SERIES.fetch_add(1, Ordering::Relaxed) as u32;
+    let cid = CONTAINER_SERIES.fetch_add(1, Ordering::Relaxed);
     if cid != overflow_uid {
         return Ok(cid);
     }
 
-    Ok(CONTAINER_SERIES.fetch_add(1, Ordering::Relaxed) as u32)
+    Ok(CONTAINER_SERIES.fetch_add(1, Ordering::Relaxed))
 }
 
 #[cfg(test)]
