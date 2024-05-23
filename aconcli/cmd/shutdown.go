@@ -53,7 +53,11 @@ func stopAcon(c service.AconClient, id uint32) error {
 }
 
 func stopAconInVM(conn string, ids []uint32) error {
-	c, err := service.NewAconHttpConnWithOpts(conn, service.OptDialTLSContextInsecure())
+	opts := []service.Opt{service.OptDialTLSContextInsecure()}
+	if nologin {
+		opts = append(opts, service.OptNoAuth())
+	}
+	c, err := service.NewAconHttpConnWithOpts(conn, opts...)
 	if err != nil {
 		return fmt.Errorf("cannot connect to %s: %v\n", conn, err)
 	}
@@ -111,4 +115,6 @@ func init() {
 	rootCmd.AddCommand(shutDownCmd)
 	shutDownCmd.Flags().BoolVarP(&force, "force", "f", false,
 		"force terminating the virtual machines, i.e. no matter whether Shutdown/Kill command works")
+	shutDownCmd.Flags().BoolVar(&nologin, "nologin", false,
+		"if set, login as an anonymous user")
 }

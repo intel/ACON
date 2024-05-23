@@ -33,7 +33,11 @@ them.
 }
 
 func getAllStatus(target string) ([]service.AconStatus, error) {
-	c, err := service.NewAconHttpConnWithOpts(target, service.OptDialTLSContextInsecure())
+	opts := []service.Opt{service.OptDialTLSContextInsecure()}
+	if nologin {
+		opts = append(opts, service.OptNoAuth())
+	}
+	c, err := service.NewAconHttpConnWithOpts(target, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -143,4 +147,6 @@ func showStatus() error {
 
 func init() {
 	rootCmd.AddCommand(statusCmd)
+	statusCmd.Flags().BoolVar(&nologin, "nologin", false,
+		"if set, login as an anonymous user")
 }

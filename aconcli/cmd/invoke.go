@@ -39,9 +39,12 @@ capital letter.
 }
 
 func invoke(args []string) error {
-	c, err := service.NewAconHttpConnWithOpts(vmConnTarget,
-		service.OptDialTLSContextInsecure(),
-		service.OptTimeout(service.DefaultServiceTimeout+time.Duration(timeout)*time.Second))
+	opts := []service.Opt{service.OptDialTLSContextInsecure(),
+		service.OptTimeout(service.DefaultServiceTimeout + time.Duration(timeout)*time.Second)}
+	if nologin {
+		opts = append(opts, service.OptNoAuth())
+	}
+	c, err := service.NewAconHttpConnWithOpts(vmConnTarget, opts...)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Invoke: cannot connect to %s: %v\n", vmConnTarget, err)
 		return err
@@ -81,4 +84,7 @@ func init() {
 
 	invokeCmd.Flags().StringVarP(&inputfile, "input", "i", "",
 		"optional file serving as stdin to the command")
+
+	invokeCmd.Flags().BoolVar(&nologin, "nologin", false,
+		"if set, login as an anonymous user")
 }

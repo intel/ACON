@@ -15,7 +15,7 @@ import (
 )
 
 const (
-	DefaultServiceTimeout = 10 * time.Second
+	DefaultServiceTimeout = 60 * time.Second
 )
 
 type AconClientGrpc struct {

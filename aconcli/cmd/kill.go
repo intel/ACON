@@ -40,7 +40,11 @@ func kill(args []string) error {
 		fmt.Fprintf(os.Stderr, "Kill: cannot get signal number from %s: %v\n", args[0], err)
 		return err
 	}
-	c, err := service.NewAconHttpConnWithOpts(vmConnTarget, service.OptDialTLSContextInsecure())
+	opts := []service.Opt{service.OptDialTLSContextInsecure()}
+	if nologin {
+		opts = append(opts, service.OptNoAuth())
+	}
+	c, err := service.NewAconHttpConnWithOpts(vmConnTarget, opts...)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Kill: cannot connect to %s: %v\n", vmConnTarget, err)
 		return err
@@ -64,4 +68,7 @@ func init() {
 	killCmd.Flags().Uint32VarP(&cid, "container", "e", 0,
 		"the ACON container to which the signal will be sent")
 	killCmd.MarkFlagRequired("container")
+
+	killCmd.Flags().BoolVar(&nologin, "nologin", false,
+		"if set, login as an anonymous user")
 }
