@@ -32,6 +32,10 @@ pub const REPORT_API_VERSION: &str = "1.0.0";
 pub const ERR_CFG_INVALID_VSOCK_PORT: &str = "Invalid kernel cmdline parameter - acond.vsock_port";
 pub const ERR_CFG_INVALID_TCPIP_PORT: &str = "Invalid kernel cmdline parameter - acond.tcp_port";
 pub const ERR_CFG_INVALID_TIMEOUT: &str = "Invalid kernel cmdline parameter - acond.timeout";
+#[rustfmt::skip]
+pub const ERR_CFG_INVALID_OPENID_USER: &str = "Invalid kernel cmdline parameter - acond.openid_user";
+#[rustfmt::skip]
+pub const ERR_CFG_INVALID_HTTPS_PROXY: &str = "Invalid kernel cmdline parameter - acond.https_proxy";
 pub const ERR_RPC_INCOMPATIBLE_POLICY: &str = "Incompatible polices";
 pub const ERR_RPC_MANIFEST_FINALIZED: &str = "Manifests finalized";
 pub const ERR_RPC_INVALID_SIGNATURE: &str = "Invalid digital signature";

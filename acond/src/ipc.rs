@@ -12,6 +12,7 @@ use std::{
     sync::Arc,
 };
 use tokio::{
+    io::AsyncReadExt,
     net::{UnixListener, UnixStream},
     sync::{mpsc, oneshot, watch, RwLock},
 };
@@ -151,16 +152,12 @@ async fn handle_request(mut stream: UnixStream, tx: mpsc::Sender<Request>) -> Re
             Ok((msg_hdr, mut msg_hdr_buf)) => {
                 let msg_size = msg_hdr.size as usize;
                 if msg_size > utils::MAX_BUFF_SIZE || msg_size < mem::size_of::<AconMessageHdr>() {
-                    utils::ERR_IPC_INVALID_REQUEST.as_bytes().to_vec();
-                }
-
-                match acond_io::read_async_with_size(
-                    &mut stream,
-                    msg_size - mem::size_of::<AconMessageHdr>(),
-                )
-                .await
-                {
-                    Ok(mut msg_body_buf) => {
+                    utils::ERR_IPC_INVALID_REQUEST.as_bytes().to_vec()
+                } else {
+                    let mut msg_body_buf = vec![0; msg_size - mem::size_of::<AconMessageHdr>()];
+                    if stream.read_exact(&mut msg_body_buf).await.is_err() {
+                        utils::ERR_IPC_INVALID_REQUEST.as_bytes().to_vec()
+                    } else {
                         let (resp_tx, resp_rx) = oneshot::channel();
                         let mut buf = vec![];
                         buf.append(&mut msg_hdr_buf);
@@ -176,7 +173,6 @@ async fn handle_request(mut stream: UnixStream, tx: mpsc::Sender<Request>) -> Re
                         let _ = tx.send(request).await;
                         resp_rx.await?
                     }
-                    Err(_) => utils::ERR_IPC_INVALID_REQUEST.as_bytes().to_vec(),
                 }
             }
             Err(_) => utils::ERR_IPC_INVALID_REQUEST.as_bytes().to_vec(),
