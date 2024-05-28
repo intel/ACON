@@ -34,7 +34,6 @@ walkdir = "2.3.2"
 tokio-send-fd = "0.9.3"
 openidconnect = "3.5.0"
 chrono = "0.4.38"
-reqwest = "0.12.4"
 env_logger = "0.11.3"
 
 [dev-dependencies]
