@@ -32,10 +32,6 @@ pub const REPORT_API_VERSION: &str = "1.0.0";
 pub const ERR_CFG_INVALID_VSOCK_PORT: &str = "Invalid kernel cmdline parameter - acond.vsock_port";
 pub const ERR_CFG_INVALID_TCPIP_PORT: &str = "Invalid kernel cmdline parameter - acond.tcp_port";
 pub const ERR_CFG_INVALID_TIMEOUT: &str = "Invalid kernel cmdline parameter - acond.timeout";
-#[rustfmt::skip]
-pub const ERR_CFG_INVALID_OPENID_USER: &str = "Invalid kernel cmdline parameter - acond.openid_user";
-#[rustfmt::skip]
-pub const ERR_CFG_INVALID_HTTPS_PROXY: &str = "Invalid kernel cmdline parameter - acond.https_proxy";
 pub const ERR_RPC_INCOMPATIBLE_POLICY: &str = "Incompatible polices";
 pub const ERR_RPC_MANIFEST_FINALIZED: &str = "Manifests finalized";
 pub const ERR_RPC_INVALID_SIGNATURE: &str = "Invalid digital signature";
@@ -218,19 +214,8 @@ fn calc_sha512_from_buffer(buffer: &[u8]) -> Result<String> {
 fn calc_digest_from_buffer(buffer: &[u8], algorithm: MessageDigest) -> Result<DigestBytes> {
     let mut hasher = Hasher::new(algorithm)?;
 
-    let mut i = 0;
-    loop {
-        let len = if buffer.len() - i < BUFF_SIZE {
-            buffer.len() - i
-        } else {
-            BUFF_SIZE
-        };
-        hasher.update(&buffer[i..i + len])?;
-
-        i += BUFF_SIZE;
-        if i >= buffer.len() {
-            break;
-        }
+    for chunk in buffer.chunks(BUFF_SIZE) {
+        hasher.update(chunk)?;
     }
 
     Ok(hasher.finish()?)
@@ -506,22 +491,17 @@ pub fn save_blob(layers: &Vec<String>, data: &[u8]) -> Result<()> {
     Ok(())
 }
 
-pub fn get_missing_layers(image_id: &String, layers: &Vec<String>) -> Result<Vec<String>> {
-    let mut missing_layers = vec![];
-
+pub fn get_missing_layers(image_id: &String, layers: &[String]) -> Result<Vec<String>> {
     let image_path = Path::new(STORAGE_ROOT)
         .join(IMAGES_DIR)
         .join(image_id)
         .join(IMAGE_LAYER);
+
     if !image_path.exists() {
-        for l in layers {
-            missing_layers.push(l.clone());
-        }
-        return Ok(missing_layers);
+        return Ok(layers.to_owned());
     }
 
-    let backup = env::current_dir()?;
-    env::set_current_dir(&image_path)?;
+    let mut missing_layers = Vec::new();
     for entry in image_path.read_dir()? {
         if let Ok(res) = entry?.path().read_link() {
             if !res.exists() {
@@ -532,7 +512,6 @@ pub fn get_missing_layers(image_id: &String, layers: &Vec<String>) -> Result<Vec
             }
         }
     }
-    env::set_current_dir(backup)?;
 
     Ok(missing_layers)
 }
@@ -548,9 +527,6 @@ pub fn get_manifest(image_id: &String) -> Result<String> {
 }
 
 pub fn get_container_info(container_id: u32, container_pid: Pid) -> Result<(u32, String)> {
-    let mut name = String::new();
-    let mut state = 0;
-
     let prefix = PathBuf::from(STORAGE_ROOT)
         .join(CONTAINERS_DIR)
         .join(format!("{}", container_id))
@@ -558,39 +534,33 @@ pub fn get_container_info(container_id: u32, container_pid: Pid) -> Result<(u32,
     let link = fs::read_link(format!("/proc/{}/exe", container_pid))?;
     let exe = link.strip_prefix(prefix)?;
 
-    let reader = BufReader::new(File::open(format!("/proc/{}/status", container_pid))?);
+    let fstatus = format!("/proc/{}/status", container_pid);
+    let reader = BufReader::new(File::open(&fstatus)?);
+
+    let mut name = String::new();
+    let mut state = 0;
+
     for l in reader.lines() {
         let line = l?;
 
-        if line.starts_with("Name:") {
-            let process_name = line.split_ascii_whitespace().collect::<Vec<_>>();
-            if process_name.len() < 2 {
-                return Err(anyhow!(
-                    "File format error of {}.",
-                    format!("/proc/{}/status", container_pid)
-                ));
+        let mut parts = line.split_ascii_whitespace();
+        match parts.next() {
+            Some("Name:") => {
+                name = parts
+                    .next()
+                    .ok_or_else(|| anyhow!("File format error of {}.", fstatus))?
+                    .into();
             }
-
-            name = process_name[1].to_string();
-        }
-
-        if line.starts_with("State:") {
-            let process_state = line.split_ascii_whitespace().collect::<Vec<_>>();
-            if process_state.len() < 2 {
-                return Err(anyhow!(
-                    "File format error of {}.",
-                    format!("/proc/{}/status", container_pid)
-                ));
+            Some("State:") => {
+                state = parts
+                    .next()
+                    .ok_or_else(|| anyhow!("File format error of {}.", fstatus))?
+                    .chars()
+                    .next()
+                    .ok_or_else(|| anyhow!("File format error of {}.", fstatus))?
+                    as u32;
             }
-
-            if let Some(s) = process_state[1].chars().next() {
-                state = s as u32;
-            } else {
-                return Err(anyhow!(
-                    "File format error of {}.",
-                    format!("/proc/{}/status", container_pid)
-                ));
-            }
+            _ => continue,
         }
     }
 
@@ -614,20 +584,12 @@ pub fn is_init_process(pid: i32) -> Result<bool> {
     for line in reader.lines() {
         let line = match line {
             Ok(l) => l,
-            Err(_) => {
-                return Ok(false);
-            }
+            Err(_) => return Ok(false),
         };
 
         if line.starts_with("NSpid:") {
             let nspid = line.split_ascii_whitespace().collect::<Vec<_>>();
-            if nspid.len() < 3 {
-                return Ok(false);
-            }
-
-            if nspid[2] == "1" {
-                return Ok(true);
-            }
+            return Ok(nspid.get(2) == Some(&"1"));
         }
     }
 
@@ -639,13 +601,11 @@ pub fn is_rootfs_mounted() -> bool {
 }
 
 pub fn start_with_uppercase(command: &str) -> bool {
-    if let Some(c) = command.chars().next() {
-        if c.is_uppercase() {
-            return true;
-        }
-    }
-
-    false
+    command
+        .chars()
+        .next()
+        .map(|c| c.is_uppercase())
+        .unwrap_or(false)
 }
 
 pub fn get_env_vars(manifest_envs: &Vec<String>, param_envs: &Vec<String>) -> Result<Vec<String>> {

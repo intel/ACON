@@ -445,17 +445,12 @@ fn get_ptsname(fd: RawFd) -> Result<String> {
 
 fn is_hotkey_pressed(buf: &mut Vec<u8>) -> bool {
     let hk: [u8; 2] = [0x1b, 0x0f];
-    let hk_len = hk.len();
-    let buf_len = buf.len();
 
-    let mut i = 0;
-    while buf_len >= hk_len && i <= buf_len - hk_len {
-        if &buf[i..i + hk_len] == &hk[..] {
-            buf.drain(i..i + 2);
-            return true;
+    match buf.windows(hk.len()).position(|w| w == hk) {
+        Some(i) => {
+            buf.drain(i..i + hk.len());
+            true
         }
-        i += 1;
+        None => false,
     }
-
-    false
 }
