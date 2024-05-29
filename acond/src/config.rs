@@ -10,6 +10,8 @@ const KEY_VSOCK_CONN: &str = "acond.vsock_conn";
 const KEY_VSOCK_PORT: &str = "acond.vsock_port";
 const KEY_TCP_PORT: &str = "acond.tcp_port";
 const KEY_TIMEOUT: &str = "acond.timeout";
+const KEY_OPENID_USER: &str = "acond.openid_user";
+const KEY_HTTPS_PROXY: &str = "acond.https_proxy";
 const DEF_VSOCK_PORT: u32 = 1024;
 const DEF_TCP_PORT: u32 = 1025;
 const DEF_TIMEOUT: u32 = 180;
@@ -20,6 +22,8 @@ pub struct Config {
     pub vsock_port: u32,
     pub tcp_port: u32,
     pub timeout: u32,
+    pub openid_user: Option<String>,
+    pub https_proxy: Option<String>,
 }
 
 impl Config {
@@ -29,6 +33,8 @@ impl Config {
             vsock_port: DEF_VSOCK_PORT,
             tcp_port: DEF_TCP_PORT,
             timeout: DEF_TIMEOUT,
+            openid_user: None,
+            https_proxy: None,
         }
     }
 
@@ -36,30 +42,35 @@ impl Config {
         let f = file.unwrap_or(KERNEL_CMDLINE);
         let cmdline = fs::read_to_string(f)?;
         let params = cmdline.split_ascii_whitespace();
+
         for param in params {
-            if param.starts_with(KEY_VSOCK_CONN.to_string().as_str()) {
-                self.vsock_conn = true;
-            } else if param.starts_with(format!("{}=", KEY_VSOCK_PORT).as_str()) {
-                let fields = param.split('=').collect::<Vec<_>>();
-                if fields.len() != 2 {
-                    return Err(anyhow!(utils::ERR_CFG_INVALID_VSOCK_PORT));
-                }
+            let mut parts = param.splitn(2, '=');
+            let key = parts.next();
+            let value = parts.next();
 
-                self.vsock_port = fields[1].parse::<u32>()?;
-            } else if param.starts_with(format!("{}=", KEY_TCP_PORT).as_str()) {
-                let fields = param.split('=').collect::<Vec<_>>();
-                if fields.len() != 2 {
-                    return Err(anyhow!(utils::ERR_CFG_INVALID_TCPIP_PORT));
+            match key {
+                Some(KEY_VSOCK_CONN) if value.is_none() => self.vsock_conn = true,
+                Some(KEY_VSOCK_PORT) => {
+                    self.vsock_port = value
+                        .ok_or_else(|| anyhow!(utils::ERR_CFG_INVALID_VSOCK_PORT))?
+                        .parse::<u32>()
+                        .map_err(|_| anyhow!(utils::ERR_CFG_INVALID_VSOCK_PORT))?
                 }
-
-                self.tcp_port = fields[1].parse::<u32>()?;
-            } else if param.starts_with(format!("{}=", KEY_TIMEOUT).as_str()) {
-                let fields = param.split('=').collect::<Vec<_>>();
-                if fields.len() != 2 {
-                    return Err(anyhow!(utils::ERR_CFG_INVALID_TIMEOUT));
+                Some(KEY_TCP_PORT) => {
+                    self.tcp_port = value
+                        .ok_or_else(|| anyhow!(utils::ERR_CFG_INVALID_TCPIP_PORT))?
+                        .parse::<u32>()
+                        .map_err(|_| anyhow!(utils::ERR_CFG_INVALID_TCPIP_PORT))?
                 }
-
-                self.timeout = fields[1].parse::<u32>()?;
+                Some(KEY_TIMEOUT) => {
+                    self.timeout = value
+                        .ok_or_else(|| anyhow!(utils::ERR_CFG_INVALID_TIMEOUT))?
+                        .parse::<u32>()
+                        .map_err(|_| anyhow!(utils::ERR_CFG_INVALID_TIMEOUT))?
+                }
+                Some(KEY_OPENID_USER) => self.openid_user = value.map(|s| s.into()),
+                Some(KEY_HTTPS_PROXY) => self.https_proxy = value.map(|s| s.into()),
+                _ => (),
             }
         }
 
