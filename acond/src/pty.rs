@@ -1,9 +1,10 @@
 // Copyright (C) 2023 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::io as acond_io;
+use crate::utils;
 use anyhow::{anyhow, Result};
 use nix::{
+    errno::Errno,
     libc, pty,
     sys::{
         select::{self, FdSet},
@@ -13,7 +14,7 @@ use nix::{
 };
 use rustyline::{error::ReadlineError, Editor};
 use std::{
-    collections::HashMap,
+    collections::BTreeMap,
     ffi::{CStr, CString},
     io::{self as stdio, Write},
     os::unix::io::{FromRawFd, RawFd},
@@ -23,7 +24,7 @@ use std::{
 };
 use tokio::{
     fs::File,
-    io,
+    io::{self, AsyncReadExt},
     sync::{mpsc, oneshot, Mutex},
 };
 
@@ -46,8 +47,8 @@ pub enum Command {
 
 #[derive(Debug, Clone)]
 struct TerminalSetting {
-    def_term_settings: Termios,
-    raw_term_settings: Termios,
+    def_term_setting: Termios,
+    raw_term_setting: Termios,
 }
 
 #[derive(Debug)]
@@ -58,24 +59,23 @@ struct Terminal {
 
 #[derive(Debug)]
 struct TerminalList {
-    terminals: HashMap<RawFd, Terminal>,
+    terminals: BTreeMap<RawFd, Terminal>,
     term_setting: TerminalSetting,
 }
 
 impl TerminalSetting {
     pub fn new() -> Self {
-        let mut def_term_settings = termios::tcgetattr(libc::STDIN_FILENO).unwrap();
-
-        if def_term_settings.local_flags & LocalFlags::ICANON == LocalFlags::empty() {
-            def_term_settings.local_flags |= LocalFlags::ICANON;
+        let mut def_term_setting = termios::tcgetattr(libc::STDIN_FILENO).unwrap();
+        if def_term_setting.local_flags & LocalFlags::ICANON == LocalFlags::empty() {
+            def_term_setting.local_flags |= LocalFlags::ICANON;
         }
 
-        let mut raw_term_settings = def_term_settings.clone();
-        termios::cfmakeraw(&mut raw_term_settings);
+        let mut raw_term_setting = def_term_setting.clone();
+        termios::cfmakeraw(&mut raw_term_setting);
 
         Self {
-            def_term_settings,
-            raw_term_settings,
+            def_term_setting,
+            raw_term_setting,
         }
     }
 
@@ -83,7 +83,7 @@ impl TerminalSetting {
         termios::tcsetattr(
             libc::STDIN_FILENO,
             SetArg::TCSAFLUSH,
-            &self.raw_term_settings,
+            &self.raw_term_setting,
         )?;
 
         Ok(())
@@ -93,7 +93,7 @@ impl TerminalSetting {
         termios::tcsetattr(
             libc::STDIN_FILENO,
             SetArg::TCSAFLUSH,
-            &self.def_term_settings,
+            &self.def_term_setting,
         )?;
 
         Ok(())
@@ -113,14 +113,16 @@ impl Terminal {
     }
 
     pub fn set_prompt(&mut self, prompt: Vec<u8>) {
-        self.prompt = Some(prompt);
+        if !prompt.is_empty() {
+            self.prompt = Some(prompt);
+        }
     }
 }
 
 impl TerminalList {
     pub fn new() -> Self {
         Self {
-            terminals: HashMap::new(),
+            terminals: BTreeMap::new(),
             term_setting: TerminalSetting::new(),
         }
     }
@@ -139,13 +141,17 @@ impl TerminalList {
         Ok(())
     }
 
-    pub fn enter_terminal(&mut self, master: RawFd) -> Result<()> {
+    pub fn enter_terminal(&mut self, master: RawFd) -> Option<&Terminal> {
         if let Some(terminal) = self.terminals.get_mut(&master) {
-            self.term_setting.enter_terminal()?;
+            if self.term_setting.enter_terminal().is_err() {
+                return None;
+            }
+
             terminal.set_active(true);
+            return Some(terminal);
         }
 
-        Ok(())
+        None
     }
 
     pub fn leave_terminal(&mut self) -> Result<()> {
@@ -160,46 +166,32 @@ impl TerminalList {
 
 pub async fn run_terminal_server(mut rx: mpsc::Receiver<Command>) -> Result<()> {
     while let Some(cmd) = rx.recv().await {
+        let ref_terminal_list = TERMINAL_LIST.clone();
+        let mut terminal_list = ref_terminal_list.lock().await;
+
         match cmd {
             Command::Enter { master, resp } => {
-                let ref_terminal_list = TERMINAL_LIST.clone();
-                let mut terminal_list = ref_terminal_list.lock().await;
+                let prompt = terminal_list.enter_terminal(master).map(|terminal| {
+                    terminal
+                        .prompt
+                        .as_ref()
+                        .map_or_else(Vec::new, |p| p.clone())
+                });
 
-                if terminal_list.terminals.contains_key(&master) {
-                    terminal_list.enter_terminal(master)?;
-
-                    let terminal = terminal_list.terminals.get(&master).unwrap();
-                    if let Some(prompt) = terminal.prompt.as_ref() {
-                        let _ = resp.send(Some(prompt.clone()));
-                    } else {
-                        let _ = resp.send(Some(vec![]));
-                    }
-                } else {
-                    let _ = resp.send(None);
-                }
+                let _ = resp.send(prompt);
             }
             Command::Leave { resp } => {
-                let ref_terminal_list = TERMINAL_LIST.clone();
-                let mut terminal_list = ref_terminal_list.lock().await;
-
                 terminal_list.leave_terminal()?;
                 let _ = resp.send(true);
             }
             Command::List { resp } => {
-                let ref_terminal_list = TERMINAL_LIST.clone();
-                let terminal_list = ref_terminal_list.lock().await;
-
-                let terms = terminal_list
-                    .terminals
-                    .keys()
-                    .map(|k| *k)
-                    .collect::<Vec<_>>();
+                let terms = terminal_list.terminals.keys().copied().collect::<Vec<_>>();
                 let _ = resp.send(terms);
             }
         }
     }
 
-    return Err(anyhow!("Unexpected error."));
+    Err(anyhow!("Unexpected error."))
 }
 
 pub async fn monitor_terminal(fd: RawFd) -> Result<()> {
@@ -211,13 +203,11 @@ pub async fn monitor_terminal(fd: RawFd) -> Result<()> {
 
     let mut reader = unsafe { File::from_raw_fd(fd) };
     loop {
-        let buf = match acond_io::read_async(&mut reader).await {
+        let buf = match async_read(&mut reader).await {
             Ok(b) => b,
             Err(e) => {
-                let mut terminal_list = ref_terminal_list.lock().await;
-                terminal_list.remove_terminal(fd)?;
-
-                return Err(e.into());
+                ref_terminal_list.lock().await.remove_terminal(fd)?;
+                return Err(e);
             }
         };
 
@@ -229,9 +219,12 @@ pub async fn monitor_terminal(fd: RawFd) -> Result<()> {
                 terminal_list.remove_terminal(fd)?;
                 return Err(e.into());
             }
-        } else {
-            if terminal.prompt.is_none() {
-                terminal.set_prompt(buf);
+        }
+
+        if buf.ends_with(b"# ") || buf.ends_with(b"$ ") {
+            match buf.iter().rposition(|&b| b == b'\n') {
+                Some(p) => terminal.set_prompt(buf[p + 1..].to_vec()),
+                None => terminal.set_prompt(buf),
             }
         }
     }
@@ -241,39 +234,43 @@ pub fn run_acond_terminal(tx: mpsc::Sender<Command>) -> Result<()> {
     let mut editor = Editor::<()>::new()?;
 
     loop {
-        match editor.readline("[Acond]: ") {
-            Ok(line) => {
-                match line.trim() {
-                    "" => continue,
-                    "?" | "h" | "help" => print_help(),
-                    "l" | "list" => list_terminals(tx.clone())?,
-                    "d" | "debug" => {
-                        if let Some(fd) = start_pod_terminal()? {
-                            enter_pod_terminal(fd)?;
-                        }
-                    }
-                    trim_line => {
-                        if let Some(fd) = validate_command(trim_line) {
-                            enter_container_terminal(fd, tx.clone())?;
-                        }
-                    }
-                }
-
-                editor.add_history_entry(line.as_str());
-            }
-            Err(ReadlineError::Interrupted) => (),
-            Err(ReadlineError::Eof) => eprintln!("Acond can't be ended."),
+        let line = match editor.readline("[Acond]: ") {
+            Ok(line) => line,
+            Err(ReadlineError::Interrupted) | Err(ReadlineError::Eof) => continue,
             Err(e) => return Err(e.into()),
-        }
-    }
-}
+        };
 
-fn print_help() {
-    println!("list[l] -- List all the enclave pesudo terminals.");
-    println!("enter[e] master -- Enter the specified enclave pesudo terminal. Press Ctrl+Alt+O and then x|X to back to acond command line.");
-    println!("debug[d] -- Enter VM pesudo terminal for debug purpose if sh or bash exists.");
-    println!("help[h|?] -- Show help messages.");
-    println!();
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+
+        match line {
+            "?" | "h" | "help" => println!(
+                "list[l]         -- List all the container pseudo terminals.\n\
+                 enter[e] master -- Enter the specified container pseudo terminal. Press Ctrl+Alt+O and then x|X to back to acond command line.\n\
+                 debug[d]        -- Enter VM pseudo terminal for debug purpose if sh or bash exists.\n\
+                 help[h|?]       -- Show help messages.\n"
+            ),
+            "l" | "list" => list_terminals(tx.clone())?,
+            "d" | "debug" => {
+                if let Some(fd) = start_pod_terminal()? {
+                    enter_pod_terminal(fd)?;
+                } else {
+                    eprintln!("No shell is found to launch debug terminal.");
+                }
+            }
+            _ => {
+                if let Some(fd) = validate_command(line) {
+                    enter_container_terminal(fd, tx.clone())?;
+                } else {
+                    eprintln!("Please input correct command, '?|h|help' for help.");
+                }
+            }
+        }
+
+        editor.add_history_entry(line);
+    }
 }
 
 fn list_terminals(tx: mpsc::Sender<Command>) -> Result<()> {
@@ -307,9 +304,6 @@ fn start_pod_terminal() -> Result<Option<RawFd>> {
                 });
             }
         }
-    } else {
-        eprintln!("No shell is found to launch debug terminal.");
-        return Ok(None);
     }
 
     Ok(None)
@@ -324,11 +318,11 @@ fn enter_pod_terminal(fd: RawFd) -> Result<()> {
     fdset.insert(libc::STDIN_FILENO);
 
     loop {
-        let mut rfdset = fdset.clone();
+        let mut rfdset = fdset;
         select::select(None, Some(&mut rfdset), None, None, None)?;
 
         if rfdset.contains(fd) {
-            if let Ok(buf) = acond_io::read(fd) {
+            if let Ok(buf) = read(fd) {
                 unistd::write(libc::STDOUT_FILENO, &buf)?;
             } else {
                 unistd::close(fd)?;
@@ -339,7 +333,7 @@ fn enter_pod_terminal(fd: RawFd) -> Result<()> {
         }
 
         if rfdset.contains(libc::STDIN_FILENO) {
-            let buf = acond_io::read(libc::STDIN_FILENO)?;
+            let buf = read(libc::STDIN_FILENO)?;
             if let Err(e) = unistd::write(fd, &buf) {
                 unistd::close(fd)?;
                 setting.leave_terminal()?;
@@ -351,22 +345,12 @@ fn enter_pod_terminal(fd: RawFd) -> Result<()> {
 }
 
 fn validate_command(cmd: &str) -> Option<i32> {
-    if !cmd.starts_with("e ") && !cmd.starts_with("enter ") {
-        eprintln!("Command '{}' is unsupported.", cmd);
-        return None;
-    }
-
     let params = cmd.split_whitespace().collect::<Vec<_>>();
-    if params.len() != 2 {
-        eprintln!("Please input command 'enter[e] master'.");
-        return None;
-    }
 
-    if let Ok(master) = params[1].parse::<i32>() {
-        return Some(master);
+    if (cmd.starts_with("e ") || cmd.starts_with("enter ")) && params.len() == 2 {
+        params[1].parse().ok()
     } else {
-        eprintln!("Please input command 'enter[e] master'.");
-        return None;
+        None
     }
 }
 
@@ -383,7 +367,7 @@ fn enter_container_terminal(fd: RawFd, tx: mpsc::Sender<Command>) -> Result<()> 
             stdio::stdout().flush()?;
         }
         Ok(None) => {
-            eprintln!("Master {} is not found.", fd);
+            eprintln!("Master {fd} is not found.");
             return Ok(());
         }
         Err(e) => return Err(e.into()),
@@ -397,18 +381,19 @@ fn enter_container_terminal(fd: RawFd, tx: mpsc::Sender<Command>) -> Result<()> 
     efdset.insert(fd);
 
     loop {
-        let mut rfdset = fdset.clone();
-        let mut eefdset = efdset.clone();
+        let mut rfdset = fdset;
+        let mut eefdset = efdset;
         select::select(None, Some(&mut rfdset), None, Some(&mut eefdset), None)?;
 
         if rfdset.contains(libc::STDIN_FILENO) {
-            let mut buf = acond_io::read(libc::STDIN_FILENO)?;
+            let mut buf = read(libc::STDIN_FILENO)?;
 
             if hotkey_pressed {
                 if buf[0] == 0x58 || buf[0] == 0x78 {
                     let (resp_tx, resp_rx) = oneshot::channel();
                     let _ = tx.blocking_send(Command::Leave { resp: resp_tx });
                     let _ = resp_rx.blocking_recv();
+                    println!();
 
                     return Ok(());
                 }
@@ -453,4 +438,47 @@ fn is_hotkey_pressed(buf: &mut Vec<u8>) -> bool {
         }
         None => false,
     }
+}
+
+fn read(fd: RawFd) -> Result<Vec<u8>> {
+    let mut buf = Vec::new();
+    let mut chunk = [0u8; utils::BUFF_SIZE];
+
+    loop {
+        match unistd::read(fd, &mut chunk) {
+            Ok(0) => break,
+            Ok(n) => {
+                buf.extend_from_slice(&chunk[..n]);
+                if n < chunk.len() {
+                    break;
+                }
+            }
+            Err(Errno::EAGAIN) => continue,
+            Err(e) => return Err(e.into()),
+        }
+    }
+
+    Ok(buf)
+}
+
+async fn async_read<R>(reader: &mut R) -> Result<Vec<u8>>
+where
+    R: AsyncReadExt + Unpin,
+{
+    let mut buf = Vec::new();
+    let mut chunk = [0u8; utils::BUFF_SIZE];
+
+    loop {
+        match reader.read(&mut chunk).await {
+            Ok(n) => {
+                buf.extend_from_slice(&chunk[..n]);
+                if n < chunk.len() {
+                    break;
+                }
+            }
+            Err(e) => return Err(e.into()),
+        }
+    }
+
+    Ok(buf)
 }

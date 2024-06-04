@@ -17,7 +17,6 @@ use tokio::runtime::Builder;
 mod config;
 mod container;
 mod image;
-mod io;
 mod ipc;
 mod mount;
 mod oidc;
@@ -73,7 +72,7 @@ fn start_service() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Uncomment it to debug.
+    // Uncomment this line to show debug information.
     // env_logger::init_from_env(env_logger::Env::default().default_filter_or("debug"));
     mount::mount_rootfs()?;
 

@@ -213,11 +213,7 @@ fn calc_sha512_from_buffer(buffer: &[u8]) -> Result<String> {
 
 fn calc_digest_from_buffer(buffer: &[u8], algorithm: MessageDigest) -> Result<DigestBytes> {
     let mut hasher = Hasher::new(algorithm)?;
-
-    for chunk in buffer.chunks(BUFF_SIZE) {
-        hasher.update(chunk)?;
-    }
-
+    hasher.update(buffer)?;
     Ok(hasher.finish()?)
 }
 

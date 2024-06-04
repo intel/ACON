@@ -17,7 +17,7 @@ use std::{
     os::unix::net::UnixStream as StdUnixStream, slice, str, sync::Arc,
 };
 use tokio::{
-    io::AsyncReadExt,
+    io::{AsyncReadExt, AsyncWriteExt},
     net::UnixStream,
     signal::unix as tokio_unix,
     sync::{mpsc, watch, RwLock},
@@ -32,7 +32,7 @@ use crate::{
     config::Config,
     container::{self, CStatus, Container},
     image::{Image, Manifest},
-    io as acond_io, ipc,
+    ipc,
     pod::Pod,
     report, utils,
 };
@@ -188,7 +188,7 @@ async fn start_service(
             },
         };
 
-        acond_io::write_async(&mut stream, &send_buf, send_buf.len()).await?;
+        stream.write_all(&send_buf).await?;
     }
 }
 

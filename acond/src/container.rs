@@ -228,7 +228,7 @@ impl Container {
                 config_args: None,
                 exec_args: ExecArgs {
                     args,
-                    envs: envs.iter().map(|var| var.clone()).collect::<Vec<_>>(),
+                    envs: envs.to_vec(),
                 },
                 stdin: None,
                 stdout: None,
@@ -237,7 +237,7 @@ impl Container {
 
             create_child(&fork_args)?;
 
-            return Ok((vec![], vec![]));
+            Ok((vec![], vec![]))
         }
 
         #[cfg(not(feature = "interactive"))]

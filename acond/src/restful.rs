@@ -3,7 +3,7 @@
 
 use crate::{
     config::Config,
-    io as acond_io, oidc,
+    oidc,
     server::{
         AcondError, AddBlobRequest, AddManifestRequest, AddManifestResponse, Code, ExecRequest,
         ExecResponse, GetManifestRequest, GetManifestResponse, InspectRequest, InspectResponse,
@@ -52,7 +52,7 @@ use std::{
 };
 use tokio::{
     fs::{File, OpenOptions},
-    io::{AsyncSeekExt, AsyncWriteExt},
+    io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt},
     net::UnixStream,
     sync::{Mutex, RwLock},
 };
@@ -214,6 +214,10 @@ async fn add_blob(
 
         start += data.len() as u64;
     }
+
+    f.flush()
+        .await
+        .map_err(|e| RestError::Unknown(e.to_string()))?;
 
     let request = AddBlobRequest {
         alg: query_param.alg,
@@ -546,7 +550,7 @@ where
     let mut send_buf = (buf.len() as u32).to_ne_bytes().to_vec();
     send_buf.append(&mut buf);
 
-    let recv_buf = service
+    let recv_buf: Vec<u8> = service
         .do_exchange(&send_buf, path)
         .await
         .map_err(|e| RestError::Unknown(e.to_string()))?;
@@ -607,18 +611,32 @@ impl ExchangeService {
     }
 
     async fn do_exchange(&self, buf: &[u8], path: Option<&Path>) -> Result<Vec<u8>> {
-        acond_io::write_async_lock(self.stream.clone(), buf, buf.len()).await?;
+        let ref_stream = self.stream.clone();
+        let mut stream = ref_stream.lock().await;
+        stream.write_all(buf).await?;
 
         if let Some(path) = path {
-            let ref_stream = self.stream.clone();
-            let stream = ref_stream.lock().await;
             let file = File::open(path).await?;
             stream.send_fd(file.as_raw_fd()).await?;
             unistd::close(file.as_raw_fd())?;
             unistd::unlink(path)?;
         }
 
-        acond_io::read_async_lock(self.stream.clone()).await
+        let mut buf = Vec::new();
+        let mut chunk = [0u8; utils::BUFF_SIZE];
+        loop {
+            match stream.read(&mut chunk).await {
+                Ok(n) => {
+                    buf.extend_from_slice(&chunk[..n]);
+                    if n < chunk.len() {
+                        break;
+                    }
+                }
+                Err(e) => return Err(e.into()),
+            }
+        }
+
+        Ok(buf)
     }
 
     async fn refresh_hmac_key(&self) -> Result<PKey<Private>> {
