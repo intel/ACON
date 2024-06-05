@@ -21,11 +21,10 @@ use actix_web::{
         header::{ContentRange, ContentRangeSpec},
         StatusCode,
     },
-    web, App, Error, HttpResponse, HttpServer, ResponseError,
+    web, App, Error, HttpRequest, HttpResponse, HttpServer, ResponseError,
 };
 use actix_web_lab::middleware::{from_fn, Next};
 use anyhow::Result;
-use chrono::Utc;
 use futures::{StreamExt, TryStreamExt};
 use nix::{
     fcntl::{self, FlockArg},
@@ -43,7 +42,6 @@ use openssl::{
     x509::{extension::BasicConstraints, X509Builder, X509NameBuilder},
 };
 use std::{
-    convert::TryInto,
     env, fmt,
     io::SeekFrom,
     os::{fd::AsRawFd, unix::net::UnixStream as StdUnixStream},
@@ -439,10 +437,16 @@ struct LoginFormParam {
 async fn login(
     form_param: web::Form<LoginFormParam>,
     service: web::Data<ExchangeService>,
+    req: HttpRequest,
 ) -> Result<HttpResponse, RestError> {
-    defer!(env::set_var("https_proxy", ""));
-    if let Some(proxy) = service.https_proxy.as_ref() {
-        env::set_var("https_proxy", proxy);
+    if let Some(secret) = req.headers().get(header::AUTHORIZATION) {
+        if let Some(pkey) = service.hmac_key.read().await.as_deref() {
+            if oidc::verify_secret(secret, pkey) {
+                if let Ok(s) = secret.to_str() {
+                    return Ok(HttpResponse::Ok().json(s));
+                }
+            }
+        }
     }
 
     let mut secret = oidc::verify_id_token(
@@ -475,7 +479,10 @@ async fn login(
 }
 
 async fn logout(service: web::Data<ExchangeService>) -> Result<HttpResponse, RestError> {
-    service.reset_hmac_key().await;
+    service
+        .refresh_hmac_key()
+        .await
+        .map_err(|e| RestError::Unknown(e.to_string()))?;
     Ok(HttpResponse::Ok().finish())
 }
 
@@ -496,40 +503,14 @@ where
     }
 
     let key = service.hmac_key.read().await;
-    if key.is_none() {
-        return Err(error::ErrorUnauthorized(ERR_RESP_INVALID_SESSION));
-    }
-    let pkey = key.clone().unwrap();
-
-    let secret = match req.headers().get(header::AUTHORIZATION) {
-        Some(s) => s.to_str().unwrap_or_default(),
-        None => return Err(error::ErrorUnauthorized(ERR_RESP_INVALID_SESSION)),
-    };
-
-    let secret_data = data_encoding::HEXUPPER
-        .decode(secret.as_bytes())
-        .map_err(|e| error::ErrorInternalServerError(e.to_string()))?;
-    let timestamp = secret_data
-        .get(0..8)
+    let pkey = key
+        .as_deref()
         .ok_or(error::ErrorUnauthorized(ERR_RESP_INVALID_SESSION))?;
-    let hmac = secret_data
-        .get(8..)
+    let secret = req
+        .headers()
+        .get(header::AUTHORIZATION)
         .ok_or(error::ErrorUnauthorized(ERR_RESP_INVALID_SESSION))?;
-
-    let mut signer = Signer::new(MessageDigest::sha384(), &pkey)
-        .map_err(|e| error::ErrorInternalServerError(e.to_string()))?;
-    signer
-        .update(timestamp)
-        .map_err(|e| error::ErrorInternalServerError(e.to_string()))?;
-    let hmac_verified = signer
-        .sign_to_vec()
-        .map_err(|e| error::ErrorInternalServerError(e.to_string()))?;
-
-    if hmac != hmac_verified.as_slice() {
-        return Err(error::ErrorUnauthorized(ERR_RESP_INVALID_SESSION));
-    }
-
-    if Utc::now().timestamp() > i64::from_ne_bytes(timestamp.try_into().unwrap()) {
+    if !oidc::verify_secret(secret, pkey) {
         return Err(error::ErrorUnauthorized(ERR_RESP_INVALID_SESSION));
     }
 
@@ -597,16 +578,14 @@ struct ExchangeService {
     stream: Arc<Mutex<UnixStream>>,
     hmac_key: RwLock<Option<PKey<Private>>>,
     openid_user: Option<String>,
-    https_proxy: Option<String>,
 }
 
 impl ExchangeService {
-    fn new(stream: UnixStream, openid_user: Option<String>, https_proxy: Option<String>) -> Self {
+    fn new(stream: UnixStream, openid_user: Option<String>) -> Self {
         Self {
             stream: Arc::new(Mutex::new(stream)),
             hmac_key: RwLock::new(None::<PKey<Private>>),
             openid_user,
-            https_proxy,
         }
     }
 
@@ -649,21 +628,19 @@ impl ExchangeService {
 
         Ok(pkey)
     }
-
-    async fn reset_hmac_key(&self) {
-        let mut hmac_key = self.hmac_key.write().await;
-        *hmac_key = None;
-    }
 }
 
 pub async fn run_server(
     stream: StdUnixStream,
     config: &Config,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    if let Some(proxy) = config.https_proxy.as_ref() {
+        env::set_var("https_proxy", proxy);
+    }
+
     let service = web::Data::new(ExchangeService::new(
         UnixStream::from_std(stream)?,
         config.openid_user.clone(),
-        config.https_proxy.clone(),
     ));
 
     let ec_group = EcGroup::from_curve_name(Nid::SECP384R1)?;

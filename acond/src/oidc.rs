@@ -1,17 +1,24 @@
 use anyhow::{anyhow, Result};
 use chrono::{Duration, Utc};
-use openidconnect::core::{
-    CoreAuthDisplay, CoreClaimName, CoreClaimType, CoreClient, CoreClientAuthMethod,
-    CoreDeviceAuthorizationResponse, CoreGrantType, CoreJsonWebKey, CoreJsonWebKeyType,
-    CoreJsonWebKeyUse, CoreJweContentEncryptionAlgorithm, CoreJweKeyManagementAlgorithm,
-    CoreJwsSigningAlgorithm, CoreResponseMode, CoreResponseType, CoreSubjectIdentifierType,
-};
-use openidconnect::reqwest::async_http_client;
 use openidconnect::{
+    core::{
+        CoreAuthDisplay, CoreClaimName, CoreClaimType, CoreClient, CoreClientAuthMethod,
+        CoreDeviceAuthorizationResponse, CoreGrantType, CoreJsonWebKey, CoreJsonWebKeyType,
+        CoreJsonWebKeyUse, CoreJweContentEncryptionAlgorithm, CoreJweKeyManagementAlgorithm,
+        CoreJwsSigningAlgorithm, CoreResponseMode, CoreResponseType, CoreSubjectIdentifierType,
+    },
+    http::HeaderValue,
+    reqwest::async_http_client,
     AdditionalProviderMetadata, AuthType, ClientId, ClientSecret, DeviceAuthorizationUrl,
     IssuerUrl, Nonce, NonceVerifier, ProviderMetadata,
 };
+use openssl::{
+    hash::MessageDigest,
+    pkey::{PKeyRef, Private},
+    sign::Signer,
+};
 use serde::{Deserialize, Serialize};
+use std::convert::TryInto;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 struct DeviceEndpointProviderMetadata {
@@ -119,4 +126,42 @@ pub async fn verify_id_token(
     }
     .to_ne_bytes()
     .to_vec())
+}
+
+pub fn verify_secret(secret: &HeaderValue, pkey: &PKeyRef<Private>) -> bool {
+    let secret_data = match data_encoding::HEXUPPER.decode(secret.as_bytes()) {
+        Ok(data) => data,
+        Err(_) => return false,
+    };
+
+    let timestamp = match secret_data.get(0..8) {
+        Some(timestamp) => timestamp,
+        None => return false,
+    };
+    let hmac = match secret_data.get(8..) {
+        Some(hmac) => hmac,
+        None => return false,
+    };
+
+    let mut signer = match Signer::new(MessageDigest::sha384(), pkey) {
+        Ok(signer) => signer,
+        Err(_) => return false,
+    };
+    if signer.update(timestamp).is_err() {
+        return false;
+    }
+    let hmac_verified = match signer.sign_to_vec() {
+        Ok(hmac) => hmac,
+        Err(_) => return false,
+    };
+
+    if hmac != hmac_verified.as_slice() {
+        return false;
+    }
+
+    if Utc::now().timestamp() > i64::from_ne_bytes(timestamp.try_into().unwrap()) {
+        return false;
+    }
+
+    true
 }
