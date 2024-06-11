@@ -84,7 +84,4 @@ func init() {
 
 	invokeCmd.Flags().StringVarP(&inputfile, "input", "i", "",
 		"optional file serving as stdin to the command")
-
-	invokeCmd.Flags().BoolVar(&nologin, "nologin", false,
-		"if set, login as an anonymous user")
 }

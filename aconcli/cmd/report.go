@@ -172,6 +172,4 @@ func init() {
 		"getting quote instead of getting report")
 	reportCmd.Flags().StringVarP(&file, "file", "f", "",
 		"file path to dump the report or quote raw data")
-	reportCmd.Flags().BoolVar(&nologin, "nologin", false,
-		"if set, login as an anonymous user")
 }

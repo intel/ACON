@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -19,6 +20,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"aconcli/cryptoutil"
 )
 
 const (
@@ -106,11 +109,12 @@ type OpenidConfig struct {
 }
 
 type AconClientHttp struct {
-	client     *http.Client
-	host       string
-	scheme     string
-	noAuth     bool
-	sessionkey string
+	client      *http.Client
+	host        string
+	scheme      string
+	noAuth      bool
+	sessionkey  string
+	fingerPrint string
 }
 
 type Opt func(*AconClientHttp) error
@@ -135,7 +139,15 @@ func OptDialTLSContextInsecure() Opt {
 			DialTLSContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 				conn, err := tls.Dial(network, addr, &tls.Config{
 					InsecureSkipVerify: true,
-					VerifyConnection: func(tls.ConnectionState) error {
+					VerifyConnection: func(tcs tls.ConnectionState) error {
+						digest, err := cryptoutil.BytesDigest(tcs.PeerCertificates[0].RawSubjectPublicKeyInfo, "sha384")
+						if err != nil {
+							return fmt.Errorf("fail to digest server's public key info: %v", err)
+						}
+						c.fingerPrint = hex.EncodeToString(digest)
+						fmt.Println("******* TLS *******")
+						fmt.Println(c.fingerPrint)
+						fmt.Println("******* TLS *******")
 						return nil
 					},
 				})
@@ -175,7 +187,7 @@ func OptDialTLSContext(caCertFilePath string) Opt {
 }
 func NewAconHttpConnWithOpts(host string, opts ...Opt) (*AconClientHttp, error) {
 	log.Println("Service: Connecting", host)
-	c := &AconClientHttp{&http.Client{Timeout: DefaultServiceTimeout}, host, "http", false, ""}
+	c := &AconClientHttp{&http.Client{Timeout: DefaultServiceTimeout}, host, "http", false, "", ""}
 	for _, opt := range opts {
 		if err := opt(c); err != nil {
 			return nil, err
@@ -264,8 +276,8 @@ func (c *AconClientHttp) setRequestAuthHeader(req *http.Request) error {
 	return nil
 }
 
-func (c *AconClientHttp) Logout(uid string, vmid string) error {
-	sessionkey, loggedIn := IsLoggedIn(uid, vmid)
+func (c *AconClientHttp) Logout(uid string) error {
+	sessionkey, loggedIn := IsLoggedIn(uid, c.fingerPrint)
 	if !loggedIn {
 		return nil
 	}
@@ -284,13 +296,13 @@ func (c *AconClientHttp) Logout(uid string, vmid string) error {
 		return fmt.Errorf(clientProcRespErrFmt, "Logout", err)
 	}
 
-	if err := RemoveAuthToken(uid, vmid); err != nil {
+	if err := RemoveAuthToken(uid, c.fingerPrint); err != nil {
 		return fmt.Errorf("fail to log out: %v", err)
 	}
 	return nil
 }
 
-func (c *AconClientHttp) Login(uid string, vmid string) error {
+func (c *AconClientHttp) Login(uid string) error {
 	clientId := os.Getenv("ATD_CLIENT_ID")
 	if clientId == "" {
 		return fmt.Errorf("failed to get env variable ATD_CLIENT_ID for authentication")
@@ -354,7 +366,7 @@ func (c *AconClientHttp) Login(uid string, vmid string) error {
 	if err := json.Unmarshal(keydata, &key); err != nil {
 		return fmt.Errorf("failed to parse access token from response: %v", err)
 	}
-	if err := UpdateAuthToken(uid, map[string]string{vmid: key}); err != nil {
+	if err := UpdateAuthToken(uid, map[string]string{c.fingerPrint: key}); err != nil {
 		return fmt.Errorf("failed to update access token: %v", err)
 	}
 	c.sessionkey = key
@@ -362,6 +374,8 @@ func (c *AconClientHttp) Login(uid string, vmid string) error {
 }
 
 func (c *AconClientHttp) fetchSessionKey() error {
+	fmt.Println("*******FETCH SESSION KEY *******")
+	fmt.Println(c.fingerPrint)
 	if len(c.sessionkey) > 0 {
 		return nil
 	}
@@ -369,7 +383,7 @@ func (c *AconClientHttp) fetchSessionKey() error {
 	if err != nil {
 		return fmt.Errorf("failed to get current user: %v", err)
 	}
-	key, err := GetAuthToken(user.Uid, c.host)
+	key, err := GetAuthToken(user.Uid, c.fingerPrint)
 	if err != nil {
 		return err
 	}

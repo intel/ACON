@@ -31,7 +31,7 @@ func login() error {
 	if err != nil {
 		return fmt.Errorf("Login: cannot get the current user: %v", err)
 	}
-	if err := c.Login(user.Uid, vmConnTarget); err != nil {
+	if err := c.Login(user.Uid); err != nil {
 		return fmt.Errorf("Login: cannot call 'login' service: %v", err)
 	}
 	return nil

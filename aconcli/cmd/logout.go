@@ -32,7 +32,7 @@ func logout() error {
 	if err != nil {
 		return fmt.Errorf("Logout: cannot get the current user: %v", err)
 	}
-	if err := c.Logout(user.Uid, vmConnTarget); err != nil {
+	if err := c.Logout(user.Uid); err != nil {
 		return fmt.Errorf("Logout: cannot call 'logout' service: %v", err)
 	}
 	return nil

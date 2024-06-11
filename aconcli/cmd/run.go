@@ -244,7 +244,7 @@ func run(args []string) error {
 			if err != nil {
 				return fmt.Errorf("Run: cannot get the current user: %v", err)
 			}
-			if err := c.Login(user.Uid, vmConnTarget); err != nil {
+			if err := c.Login(user.Uid); err != nil {
 				return fmt.Errorf("Run: cannot login as user %s: %v", user.Uid, err)
 			} else {
 				log.Println("Successfully login")

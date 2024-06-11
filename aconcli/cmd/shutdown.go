@@ -115,6 +115,4 @@ func init() {
 	rootCmd.AddCommand(shutDownCmd)
 	shutDownCmd.Flags().BoolVarP(&force, "force", "f", false,
 		"force terminating the virtual machines, i.e. no matter whether Shutdown/Kill command works")
-	shutDownCmd.Flags().BoolVar(&nologin, "nologin", false,
-		"if set, login as an anonymous user")
 }

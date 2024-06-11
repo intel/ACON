@@ -48,6 +48,4 @@ func stopAcons(args []string) error {
 
 func init() {
 	rootCmd.AddCommand(stopCmd)
-	stopCmd.Flags().BoolVar(&nologin, "nologin", false,
-		"if set, login as an anonymous user")
 }

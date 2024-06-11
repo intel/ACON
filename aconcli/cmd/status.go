@@ -147,6 +147,4 @@ func showStatus() error {
 
 func init() {
 	rootCmd.AddCommand(statusCmd)
-	statusCmd.Flags().BoolVar(&nologin, "nologin", false,
-		"if set, login as an anonymous user")
 }

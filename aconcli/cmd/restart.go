@@ -64,6 +64,4 @@ func init() {
 
 	restartCmd.Flags().Uint64VarP(&timeout, "timeout", "t", 30,
 		"optional timeout in seconds to wait before restarting the container")
-	restartCmd.Flags().BoolVar(&nologin, "nologin", false,
-		"if set, login as an anonymous user")
 }

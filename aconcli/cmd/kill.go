@@ -68,7 +68,4 @@ func init() {
 	killCmd.Flags().Uint32VarP(&cid, "container", "e", 0,
 		"the ACON container to which the signal will be sent")
 	killCmd.MarkFlagRequired("container")
-
-	killCmd.Flags().BoolVar(&nologin, "nologin", false,
-		"if set, login as an anonymous user")
 }
