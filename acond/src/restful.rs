@@ -498,20 +498,18 @@ where
         return next.call(req).await;
     }
 
-    if req.path().ends_with("/login") {
-        return next.call(req).await;
-    }
-
-    let key = service.hmac_key.read().await;
-    let pkey = key
-        .as_deref()
-        .ok_or(error::ErrorUnauthorized(ERR_RESP_INVALID_SESSION))?;
-    let secret = req
-        .headers()
-        .get(header::AUTHORIZATION)
-        .ok_or(error::ErrorUnauthorized(ERR_RESP_INVALID_SESSION))?;
-    if !oidc::verify_secret(secret, pkey) {
-        return Err(error::ErrorUnauthorized(ERR_RESP_INVALID_SESSION));
+    if !req.path().ends_with("/login") {
+        let key = service.hmac_key.read().await;
+        let pkey = key
+            .as_deref()
+            .ok_or(error::ErrorUnauthorized(ERR_RESP_INVALID_SESSION))?;
+        let secret = req
+            .headers()
+            .get(header::AUTHORIZATION)
+            .ok_or(error::ErrorUnauthorized(ERR_RESP_INVALID_SESSION))?;
+        if !oidc::verify_secret(secret, pkey) {
+            return Err(error::ErrorUnauthorized(ERR_RESP_INVALID_SESSION));
+        }
     }
 
     next.call(req).await
