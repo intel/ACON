@@ -21,6 +21,7 @@ import (
 	"strings"
 	"time"
 
+	"aconcli/config"
 	"aconcli/cryptoutil"
 )
 
@@ -142,12 +143,9 @@ func OptDialTLSContextInsecure() Opt {
 					VerifyConnection: func(tcs tls.ConnectionState) error {
 						digest, err := cryptoutil.BytesDigest(tcs.PeerCertificates[0].RawSubjectPublicKeyInfo, "sha384")
 						if err != nil {
-							return fmt.Errorf("fail to digest server's public key info: %v", err)
+							return fmt.Errorf("failed to digest server's public key info: %v", err)
 						}
 						c.fingerPrint = hex.EncodeToString(digest)
-						fmt.Println("******* TLS *******")
-						fmt.Println(c.fingerPrint)
-						fmt.Println("******* TLS *******")
 						return nil
 					},
 				})
@@ -265,6 +263,41 @@ func multipartManifestField(w *multipart.Writer, fieldname, filename string) err
 	return err
 }
 
+func (c *AconClientHttp) tlsHandShake() error {
+	conn, err := tls.Dial("tcp", c.host, &tls.Config{
+		InsecureSkipVerify: true,
+		VerifyConnection: func(tcs tls.ConnectionState) error {
+			digest, err := cryptoutil.BytesDigest(tcs.PeerCertificates[0].RawSubjectPublicKeyInfo, "sha384")
+			if err != nil {
+				return fmt.Errorf("failed to digest server's public key info: %v", err)
+			}
+			c.fingerPrint = hex.EncodeToString(digest)
+			return nil
+		},
+	})
+	if err != nil {
+		return err
+	}
+	conn.Close()
+	return nil
+}
+
+func (c *AconClientHttp) fetchSessionKey() error {
+	if len(c.sessionkey) > 0 {
+		return nil
+	}
+	user, err := user.Current()
+	if err != nil {
+		return fmt.Errorf("failed to get current user: %v", err)
+	}
+	key, err := GetAuthToken(user.Uid, c.fingerPrint)
+	if err != nil {
+		return err
+	}
+	c.sessionkey = key
+	return nil
+}
+
 func (c *AconClientHttp) setRequestAuthHeader(req *http.Request) error {
 	if c.noAuth {
 		return nil
@@ -277,6 +310,9 @@ func (c *AconClientHttp) setRequestAuthHeader(req *http.Request) error {
 }
 
 func (c *AconClientHttp) Logout(uid string) error {
+	if err := c.tlsHandShake(); err != nil {
+		return err
+	}
 	sessionkey, loggedIn := IsLoggedIn(uid, c.fingerPrint)
 	if !loggedIn {
 		return nil
@@ -297,7 +333,7 @@ func (c *AconClientHttp) Logout(uid string) error {
 	}
 
 	if err := RemoveAuthToken(uid, c.fingerPrint); err != nil {
-		return fmt.Errorf("fail to log out: %v", err)
+		return fmt.Errorf("failed to log out: %v", err)
 	}
 	return nil
 }
@@ -320,12 +356,12 @@ func (c *AconClientHttp) Login(uid string) error {
 	if err != nil {
 		return fmt.Errorf("failed to read openid config: %v", err)
 	}
-	var config OpenidConfig
-	if err := json.Unmarshal(configJson, &config); err != nil {
+	var oidConfig OpenidConfig
+	if err := json.Unmarshal(configJson, &oidConfig); err != nil {
 		return fmt.Errorf("failed to extract openid config: %v", err)
 	}
 
-	authEndpoint := config.DeviceAuthEndpoint
+	authEndpoint := oidConfig.DeviceAuthEndpoint
 	resp, err = http.PostForm(authEndpoint,
 		url.Values{
 			"client_id": {clientId},
@@ -344,7 +380,7 @@ func (c *AconClientHttp) Login(uid string) error {
 	if err := json.Unmarshal(authCodeJson, &auth); err != nil {
 		return fmt.Errorf("failed to extract auth code info: %v", err)
 	}
-	fmt.Printf("\nPlease visit the following URL via a web browser:\n\n%s\n\n"+
+	fmt.Printf("\nTo obtain the access token, please visit the following URL via a web browser:\n\n%s\n\n"+
 		"and fill in the following code:\n\n%s\n\n", auth.VerificationURL, auth.UserCode)
 
 	resp, err = c.client.PostForm(c.makeURL(endpointLogin),
@@ -358,6 +394,8 @@ func (c *AconClientHttp) Login(uid string) error {
 		return fmt.Errorf("failed to get access token: %v", err)
 	}
 	defer resp.Body.Close()
+	fmt.Printf("\nFingerprint of ACON-TD being connected: %s\n",
+		c.fingerPrint[0:config.ShortHashLen])
 	keydata, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return fmt.Errorf("failed to read response for access token: %v", err)
@@ -368,24 +406,6 @@ func (c *AconClientHttp) Login(uid string) error {
 	}
 	if err := UpdateAuthToken(uid, map[string]string{c.fingerPrint: key}); err != nil {
 		return fmt.Errorf("failed to update access token: %v", err)
-	}
-	c.sessionkey = key
-	return nil
-}
-
-func (c *AconClientHttp) fetchSessionKey() error {
-	fmt.Println("*******FETCH SESSION KEY *******")
-	fmt.Println(c.fingerPrint)
-	if len(c.sessionkey) > 0 {
-		return nil
-	}
-	user, err := user.Current()
-	if err != nil {
-		return fmt.Errorf("failed to get current user: %v", err)
-	}
-	key, err := GetAuthToken(user.Uid, c.fingerPrint)
-	if err != nil {
-		return err
 	}
 	c.sessionkey = key
 	return nil
@@ -415,7 +435,6 @@ func (c *AconClientHttp) AddManifest(manifest, sig, cert string) (string, []stri
 		return "", nil, fmt.Errorf(clientLoginErrFmt, "AddManifest", err)
 	}
 	req.Header.Add("Content-Type", w.FormDataContentType())
-	fmt.Println(req.Header)
 
 	resp, err := c.client.Do(req)
 	if err != nil {
@@ -528,6 +547,10 @@ func (c *AconClientHttp) Kill(cid uint32, signum int32) error {
 		return fmt.Errorf(clientMakeReqErrFmt, "Kill", err)
 	}
 
+	if err := c.tlsHandShake(); err != nil {
+		return err
+	}
+
 	if err := c.setRequestAuthHeader(req); err != nil {
 		return fmt.Errorf(clientLoginErrFmt, "Kill", err)
 	}
@@ -552,6 +575,10 @@ func (c *AconClientHttp) Restart(cid uint32, timeout uint64) error {
 	req, err := http.NewRequest(http.MethodPost, requestURL, nil)
 	if err != nil {
 		return fmt.Errorf(clientMakeReqErrFmt, "Restart", err)
+	}
+
+	if err := c.tlsHandShake(); err != nil {
+		return err
 	}
 
 	if err := c.setRequestAuthHeader(req); err != nil {
@@ -592,6 +619,11 @@ func (c *AconClientHttp) Invoke(cid uint32, invocation []string,
 	if err != nil {
 		return nil, nil, fmt.Errorf(clientMakeReqErrFmt, "Invoke", err)
 	}
+
+	if err := c.tlsHandShake(); err != nil {
+		return nil, nil, err
+	}
+
 	if err := c.setRequestAuthHeader(req); err != nil {
 		return nil, nil, fmt.Errorf(clientLoginErrFmt, "Invoke", err)
 	}
@@ -620,7 +652,9 @@ func (c *AconClientHttp) Inspect(cid uint32) ([]AconStatus, error) {
 	if err != nil {
 		return nil, fmt.Errorf(clientMakeReqErrFmt, "Inspect", err)
 	}
-
+	if err := c.tlsHandShake(); err != nil {
+		return nil, err
+	}
 	if err := c.setRequestAuthHeader(req); err != nil {
 		return nil, fmt.Errorf(clientLoginErrFmt, "Inspect", err)
 	}
@@ -652,6 +686,11 @@ func (c *AconClientHttp) Report(nonceLo, nonceHi uint64, reqType uint32) (data [
 	req, err := http.NewRequest(http.MethodGet, requestURL, nil)
 	if err != nil {
 		e = fmt.Errorf(clientMakeReqErrFmt, "Report", err)
+		return
+	}
+
+	if err := c.tlsHandShake(); err != nil {
+		e = err
 		return
 	}
 

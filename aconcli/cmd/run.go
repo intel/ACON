@@ -250,7 +250,6 @@ func run(args []string) error {
 				log.Println("Successfully login")
 			}
 		}
-		log.Println("no login required")
 		var bundles []*repo.Bundle
 		if len(manifests) > 0 {
 			// specific manifests

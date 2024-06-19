@@ -43,5 +43,4 @@ func init() {
 	logoutCmd.Flags().StringVarP(&vmConnTarget, "connect", "c", "",
 		"protocol/address of the ACON TD/VM")
 	logoutCmd.MarkFlagRequired("connect")
-
 }

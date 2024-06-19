@@ -4,9 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"syscall"
@@ -26,7 +24,11 @@ func getUserAuthTable(f *os.File) (AuthTable, error) {
 	if err != nil {
 		return nil, err
 	}
-	records := make([]byte, finfo.Size())
+	size := finfo.Size()
+	if size == 0 {
+		return nil, nil
+	}
+	records := make([]byte, size)
 	n, err := f.Read(records)
 	if err != nil {
 		return nil, err
@@ -54,6 +56,9 @@ func GetAuthToken(uid string, vmid string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("failed to get auth token: %v", err)
 	}
+	if authTable == nil {
+		return "", fmt.Errorf("empty auth table, no matching token found for %s", vmid)
+	}
 	token, ok := authTable[vmid]
 	if !ok {
 		return "", fmt.Errorf("no matching token found for %s", vmid)
@@ -63,7 +68,7 @@ func GetAuthToken(uid string, vmid string) (string, error) {
 
 func UpdateAuthToken(uid string, t AuthTable) error {
 	filename := filepath.Join(UserRuntimeDir, uid, AuthTableFile)
-	f, err := os.OpenFile(filename, os.O_RDWR, 0600)
+	f, err := os.OpenFile(filename, os.O_RDWR|os.O_CREATE, 0600)
 	if err != nil {
 		return fmt.Errorf("failed to open auth file: %v", err)
 	}
@@ -76,22 +81,20 @@ func UpdateAuthToken(uid string, t AuthTable) error {
 
 	wholeTable, err := getUserAuthTable(f)
 	if err != nil {
-		if !errors.Is(err, fs.ErrNotExist) {
-			return fmt.Errorf("failed to retrive whole auth data: %v", err)
-		}
+		return fmt.Errorf("failed to retrive whole auth data: %v", err)
+	}
+	if wholeTable == nil {
 		wholeTable = AuthTable{}
-	} else {
-		current := time.Now().UTC().Unix()
-		for vmid, sk := range wholeTable {
-			expired, err := isExpired(sk, current)
-			if err != nil {
-				return fmt.Errorf("failed to determine expiration: %v", err)
-			}
-			if expired {
-				delete(wholeTable, vmid)
-			}
+	}
+	current := time.Now().UTC().Unix()
+	for vmid, sk := range wholeTable {
+		expired, err := isExpired(sk, current)
+		if err != nil {
+			return fmt.Errorf("failed to determine expiration: %v", err)
 		}
-
+		if expired {
+			delete(wholeTable, vmid)
+		}
 	}
 	for k, v := range t {
 		wholeTable[k] = v
@@ -102,6 +105,10 @@ func UpdateAuthToken(uid string, t AuthTable) error {
 	}
 
 	f.Truncate(0)
+	_, err = f.Seek(0, 0)
+	if err != nil {
+		return err
+	}
 	if _, err := f.Write(authData); err != nil {
 		return fmt.Errorf("failed to write back auth data: %v\n", err)
 	}
@@ -125,6 +132,9 @@ func RemoveAuthToken(uid string, vmid string) error {
 	if err != nil {
 		return fmt.Errorf("failed to retrive whole auth data: %v", err)
 	}
+	if wholeTable == nil {
+		return fmt.Errorf("failed to remove auth token, empty auth table")
+	}
 	delete(wholeTable, vmid)
 
 	current := time.Now().UTC().Unix()
@@ -144,6 +154,10 @@ func RemoveAuthToken(uid string, vmid string) error {
 	}
 
 	f.Truncate(0)
+	_, err = f.Seek(0, 0)
+	if err != nil {
+		return err
+	}
 	if _, err := f.Write(authData); err != nil {
 		return fmt.Errorf("failed to write back auth data: %v\n", err)
 	}
