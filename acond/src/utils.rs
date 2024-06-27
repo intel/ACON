@@ -634,6 +634,27 @@ pub fn is_rootfs_mounted() -> bool {
     Path::new("/proc/mounts").exists()
 }
 
+pub fn is_mounted(path: &str) -> bool {
+    let file = match File::open("/proc/mounts") {
+        Ok(f) => f,
+        _ => return false,
+    };
+    let reader = BufReader::new(file);
+
+    for line in reader.lines() {
+        let line = match line {
+            Ok(l) => l,
+            Err(_) => return false,
+        };
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        if fields.len() > 1 && fields[1] == path {
+            return true;
+        }
+    }
+
+    false
+}
+
 pub fn start_with_uppercase(command: &str) -> bool {
     if let Some(c) = command.chars().next() {
         if c.is_uppercase() {

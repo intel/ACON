@@ -174,7 +174,7 @@ async fn start_service(
     loop {
         let len_buf = acond_io::read_async_with_size(&mut stream, mem::size_of::<u32>()).await?;
         if len_buf.len() != mem::size_of::<u32>() {
-            eprintln!(
+            log::error!(
                 "The length of message header is incorrect. {} != 4",
                 len_buf.len()
             );
@@ -184,7 +184,7 @@ async fn start_service(
         let len = u32::from_ne_bytes(len_arry) as usize;
         let recv_buf = acond_io::read_async_with_size(&mut stream, len).await?;
         if recv_buf.len() != len {
-            eprintln!(
+            log::error!(
                 "The length of message body is incorrect. {} != {}",
                 recv_buf.len(),
                 len

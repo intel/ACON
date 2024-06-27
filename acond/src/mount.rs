@@ -73,6 +73,25 @@ pub struct RootMount {
     pub option: Option<&'static str>,
 }
 
+fn mount(
+    source: Option<&str>,
+    target: &str,
+    fstype: Option<&str>,
+    flags: MsFlags,
+    option: Option<&str>,
+) -> Result<()> {
+    if !utils::is_mounted(target) {
+        let path = Path::new(target);
+        if !path.exists() {
+            fs::create_dir(path)?;
+        }
+
+        mount::mount(source, target, fstype, flags, option)?;
+    }
+
+    Ok(())
+}
+
 fn parse_mount_options(options_str: &str) -> (MsFlags, Vec<String>) {
     let mut flags = MsFlags::empty();
     let mut options = Vec::new();
@@ -94,7 +113,7 @@ fn parse_mount_options(options_str: &str) -> (MsFlags, Vec<String>) {
             "strictatime" => flags |= MsFlags::MS_STRICTATIME,
             "lazytime" => flags |= MsFlags::MS_LAZYTIME,
             _ if option.contains('=') => options.push(option.into()),
-            _ => eprintln!("Mount option '{option}' is not supported."),
+            _ => log::error!("Mount option '{option}' is not supported."),
         }
     }
 
@@ -116,22 +135,26 @@ fn mount_fstab() -> Result<()> {
             continue;
         }
 
-        if fields[2] == "swap" {
+        let source = Path::new(fields[0]);
+        if source.is_absolute() && !source.exists() {
             continue;
-        } else {
-            let target = Path::new(fields[1]);
-            if !target.exists() {
-                fs::create_dir(target)?;
-            }
+        }
 
-            let (flags, options) = parse_mount_options(fields[3]);
-            mount::mount(
-                Some(fields[0]).filter(|s| *s != "none"),
+        let (flags, options) = parse_mount_options(fields[3]);
+        if let Err(e) = mount(
+            Some(fields[0]).filter(|s| *s != "none"),
+            fields[1],
+            Some(fields[2]).filter(|s| *s != "none"),
+            flags,
+            Some(options.join(",").as_str()).filter(|s| !s.is_empty()),
+        ) {
+            log::error!(
+                "[/etc/fstab]: failed to mount {} to {} , error is {}.",
+                fields[0],
                 fields[1],
-                Some(fields[2]).filter(|s| *s != "none"),
-                flags,
-                Some(options.join(",").as_str()).filter(|s| !s.is_empty()),
-            )?;
+                e
+            );
+            return Err(e.into());
         }
     }
 
@@ -141,12 +164,7 @@ fn mount_fstab() -> Result<()> {
 pub fn mount_rootfs() -> Result<()> {
     if !utils::is_rootfs_mounted() && mount_fstab().is_err() {
         for m in ROOTFS_MOUNTS.iter() {
-            let target = Path::new(m.target);
-            if !target.exists() {
-                fs::create_dir(target)?;
-            }
-
-            mount::mount(m.source, m.target, m.fstype, m.flags, m.option)?;
+            mount(m.source, m.target, m.fstype, m.flags, m.option)?;
         }
     }
 
