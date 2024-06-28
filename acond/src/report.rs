@@ -64,7 +64,7 @@ pub fn extend_rtmr(contents: &str) -> Result<()> {
     let devf = match File::options().write(true).open(TDX_GUEST) {
         Ok(f) => Some(f),
         Err(_) => {
-            eprintln!("Failed to open {}", TDX_GUEST);
+            log::error!("Failed to open {}", TDX_GUEST);
             None
         }
     };

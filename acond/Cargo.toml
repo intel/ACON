@@ -35,6 +35,7 @@ tokio-send-fd = "0.9.3"
 openidconnect = "3.5.0"
 chrono = "0.4.38"
 env_logger = "0.11.3"
+log = "0.4.21"
 
 [dev-dependencies]
 # unit test

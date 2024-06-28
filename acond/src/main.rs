@@ -65,15 +65,14 @@ fn start_service() -> Result<(), Box<dyn std::error::Error>> {
             Ok(())
         }
         Err(errno) => {
-            eprintln!("Start service error, errno = {errno}.");
+            log::error!("Start service error, errno = {errno}.");
             Err("Start service error, errno = {errno}.".into())
         }
     }
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Uncomment this line to show debug information.
-    // env_logger::init_from_env(env_logger::Env::default().default_filter_or("debug"));
+    env_logger::init();
     mount::mount_rootfs()?;
 
     start_service()?;
