@@ -32,9 +32,12 @@ ACON containers running in them.
 }
 
 func restart(args []string) error {
-	c, err := service.NewAconHttpConnWithOpts(vmConnTarget,
-		service.OptDialTLSContextInsecure(),
-		service.OptTimeout(service.DefaultServiceTimeout+time.Duration(timeout)*time.Second))
+	opts := []service.Opt{service.OptDialTLSContextInsecure(),
+		service.OptTimeout(service.DefaultServiceTimeout + time.Duration(timeout)*time.Second)}
+	if nologin {
+		opts = append(opts, service.OptNoAuth())
+	}
+	c, err := service.NewAconHttpConnWithOpts(vmConnTarget, opts...)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Restart: cannot connect to %s: %v\n", vmConnTarget, err)
 		return err

@@ -9,6 +9,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -31,6 +32,8 @@ var (
 	startfile    string
 	vmConnTarget string
 	finalize     bool
+	vmuser       string
+	httpsProxy   string
 )
 
 var runCmd = &cobra.Command{
@@ -151,7 +154,12 @@ func loadAll(c service.AconClient, r *repo.Repo,
 
 // caller needs to close the connection
 func connect(conn string) (*service.AconClientHttp, error) {
-	return service.NewAconHttpConnWithOpts(conn, service.OptDialTLSContextInsecure())
+	if vmuser != "" {
+		return service.NewAconHttpConnWithOpts(conn, service.OptDialTLSContextInsecure())
+	} else {
+		return service.NewAconHttpConnWithOpts(conn, service.OptDialTLSContextInsecure(),
+			service.OptNoAuth())
+	}
 }
 
 func prepareEnvVsock() string {
@@ -194,6 +202,14 @@ func run(args []string) error {
 			prepareEnvTcp(string(vmConnTarget[1:]))
 		}
 
+		if vmuser != "" {
+			os.Setenv("ATD_KPARAMS",
+				strings.TrimSpace(os.Getenv("ATD_KPARAMS")+" acond.openid_user="+vmuser))
+		}
+		if httpsProxy != "" {
+			os.Setenv("ATD_KPARAMS",
+				strings.TrimSpace(os.Getenv("ATD_KPARAMS")+" acond.https_proxy="+httpsProxy))
+		}
 		var err error
 		cmd, err = vm.StartVM(startfile, debug, append(os.Environ(), config.AconVmEnvTag+vmConnTarget))
 		if err != nil {
@@ -223,6 +239,17 @@ func run(args []string) error {
 			return err
 		}
 
+		if vmuser != "" {
+			user, err := user.Current()
+			if err != nil {
+				return fmt.Errorf("Run: cannot get the current user: %v", err)
+			}
+			if err := c.Login(user.Uid); err != nil {
+				return fmt.Errorf("Run: cannot login as user %s: %v", user.Uid, err)
+			} else {
+				log.Println("Successfully login")
+			}
+		}
 		var bundles []*repo.Bundle
 		if len(manifests) > 0 {
 			// specific manifests
@@ -283,4 +310,11 @@ func init() {
 
 	runCmd.Flags().BoolVar(&finalize, "finalize", true,
 		"finalize the process of loading images to ACON TD/VM")
+
+	runCmd.Flags().StringVarP(&vmuser, "user", "u", "",
+		"user ID for OpenID authentication")
+
+	runCmd.Flags().StringVarP(&httpsProxy, "proxy", "p", "",
+		"http proxy for ACON VM")
+
 }

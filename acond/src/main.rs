@@ -17,9 +17,9 @@ use tokio::runtime::Builder;
 mod config;
 mod container;
 mod image;
-mod io;
 mod ipc;
 mod mount;
+mod oidc;
 mod pod;
 #[cfg(feature = "interactive")]
 mod pty;
@@ -37,6 +37,7 @@ fn start_service() -> Result<(), Box<dyn std::error::Error>> {
     match unsafe { unistd::fork() } {
         Ok(ForkResult::Parent { child: _ }) => {
             pstream.set_nonblocking(true)?;
+            drop(cstream);
 
             let rt = Builder::new_current_thread().enable_all().build()?;
             rt.block_on(server::start_server(pstream, &config))?;
@@ -56,9 +57,10 @@ fn start_service() -> Result<(), Box<dyn std::error::Error>> {
 
             prctl::set_name("deprivileged_server").map_err(|e| anyhow!(e.to_string()))?;
             cstream.set_nonblocking(true)?;
+            drop(pstream);
 
             let rt = Builder::new_current_thread().enable_all().build()?;
-            rt.block_on(restful::run_server(cstream, config.tcp_port))?;
+            rt.block_on(restful::run_server(cstream, &config))?;
 
             Ok(())
         }
@@ -70,7 +72,7 @@ fn start_service() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Uncomment it to debug.
+    // Uncomment this line to show debug information.
     // env_logger::init_from_env(env_logger::Env::default().default_filter_or("debug"));
     mount::mount_rootfs()?;
 

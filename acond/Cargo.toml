@@ -14,6 +14,7 @@ edition = "2018"
 #tokio-vsock = "0.4.0"
 actix-web = { version = "4.5.1", default-features = false, features = ["openssl"] }
 actix-multipart = "0.6.1"
+actix-web-lab = "0.20.2"
 tokio = { version = "1.17.0", default-features = false, features = ["rt", "fs", "io-std", "signal"] }
 futures = "0.3.21"
 prctl = "1.0.0"
@@ -31,7 +32,9 @@ scopeguard = "1.0.0"
 rustyline = "10.1.1"
 walkdir = "2.3.2"
 tokio-send-fd = "0.9.3"
-#env_logger = "0.11.3"
+openidconnect = "3.5.0"
+chrono = "0.4.38"
+env_logger = "0.11.3"
 
 [dev-dependencies]
 # unit test

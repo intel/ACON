@@ -19,6 +19,7 @@ var (
 	env              []string
 	cid              uint32
 	timeout          uint64
+	nologin          bool
 	supportHashAlgo  = []string{"sha384", "sha512"}
 	errorNoRepoFound = errors.New("No ACON repository found. May use 'aconcli init' to create one")
 	errorRepoExists  = errors.New("ACON repository already exists")

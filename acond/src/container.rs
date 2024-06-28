@@ -228,7 +228,7 @@ impl Container {
                 config_args: None,
                 exec_args: ExecArgs {
                     args,
-                    envs: envs.iter().map(|var| var.clone()).collect::<Vec<_>>(),
+                    envs: envs.to_vec(),
                 },
                 stdin: None,
                 stdout: None,
@@ -237,7 +237,7 @@ impl Container {
 
             create_child(&fork_args)?;
 
-            return Ok((vec![], vec![]));
+            Ok((vec![], vec![]))
         }
 
         #[cfg(not(feature = "interactive"))]
@@ -385,14 +385,17 @@ fn create_child(fork_args: &ForkArgs) -> Result<Pid> {
 }
 
 fn run_child(fork_args: &ForkArgs, slave: Option<i32>, csock: i32) -> Result<Pid> {
-    if let Some(stdin) = fork_args.stdin {
-        unistd::dup2(stdin, libc::STDIN_FILENO)?;
+    if let Some(fd) = fork_args.stdin {
+        unistd::dup2(fd, libc::STDIN_FILENO)?;
+        unistd::close(fd)?;
     }
-    if let Some(stdout) = fork_args.stdout {
-        unistd::dup2(stdout, libc::STDOUT_FILENO)?;
+    if let Some(fd) = fork_args.stdout {
+        unistd::dup2(fd, libc::STDOUT_FILENO)?;
+        unistd::close(fd)?;
     }
-    if let Some(stderr) = fork_args.stderr {
-        unistd::dup2(stderr, libc::STDERR_FILENO)?;
+    if let Some(fd) = fork_args.stderr {
+        unistd::dup2(fd, libc::STDERR_FILENO)?;
+        unistd::close(fd)?;
     }
 
     let gid = Gid::from_raw(fork_args.container_id);
@@ -548,7 +551,7 @@ async fn poll_output(
     let mut out_exit = false;
     let mut err_exit = false;
 
-    io::copy(&mut &in_buf[..], &mut in_writer).await?;
+    let _ = io::copy(&mut &in_buf[..], &mut in_writer).await;
     loop {
         tokio::select! {
             _ = time::sleep(Duration::from_secs(timeout)) => {

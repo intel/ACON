@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::{
-    io as acond_io,
+    config::Config,
+    oidc,
     server::{
         AcondError, AddBlobRequest, AddManifestRequest, AddManifestResponse, Code, ExecRequest,
         ExecResponse, GetManifestRequest, GetManifestResponse, InspectRequest, InspectResponse,
@@ -11,13 +12,18 @@ use crate::{
     utils,
 };
 use actix_web::{
+    body::MessageBody,
+    dev::{ServiceRequest, ServiceResponse},
+    error,
+    http::header,
     http::{
         self,
         header::{ContentRange, ContentRangeSpec},
         StatusCode,
     },
-    web, App, HttpResponse, HttpServer, ResponseError,
+    web, App, Error, HttpRequest, HttpResponse, HttpServer, ResponseError,
 };
+use actix_web_lab::middleware::{from_fn, Next};
 use anyhow::Result;
 use futures::{StreamExt, TryStreamExt};
 use nix::{
@@ -29,12 +35,14 @@ use openssl::{
     ec::{EcGroup, EcKey},
     hash::MessageDigest,
     nid::Nid,
-    pkey::PKey,
+    pkey::{PKey, Private},
+    rand,
+    sign::Signer,
     ssl::{SslAcceptor, SslMethod},
     x509::{extension::BasicConstraints, X509Builder, X509NameBuilder},
 };
 use std::{
-    fmt,
+    env, fmt,
     io::SeekFrom,
     os::{fd::AsRawFd, unix::net::UnixStream as StdUnixStream},
     path::Path,
@@ -42,9 +50,9 @@ use std::{
 };
 use tokio::{
     fs::{File, OpenOptions},
-    io::{AsyncSeekExt, AsyncWriteExt},
+    io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt},
     net::UnixStream,
-    sync::Mutex,
+    sync::{Mutex, RwLock},
 };
 use tokio_send_fd::SendFd;
 
@@ -53,6 +61,7 @@ const DEF_TIMEOUT: u64 = 30;
 const DEF_CAP_SIZE: u64 = 0x20000;
 const ERR_REQ_CONTENT_RANGE: &str = "The start of content range is bigger than the existing file";
 const ERR_RESP_FORMAT: &str = "Server response format error";
+const ERR_RESP_INVALID_SESSION: &str = "Invalid session or session expired";
 
 #[derive(Debug)]
 enum RestError {
@@ -176,6 +185,7 @@ async fn add_blob(
     let mut f = OpenOptions::new()
         .create(true)
         .write(true)
+        .truncate(true)
         .open(blob_path)
         .await
         .map_err(|e| RestError::Unknown(e.to_string()))?;
@@ -202,6 +212,10 @@ async fn add_blob(
 
         start += data.len() as u64;
     }
+
+    f.flush()
+        .await
+        .map_err(|e| RestError::Unknown(e.to_string()))?;
 
     let request = AddBlobRequest {
         alg: query_param.alg,
@@ -410,6 +424,97 @@ async fn report(
     .await
 }
 
+#[derive(serde::Deserialize)]
+struct LoginFormParam {
+    client_id: String,
+    client_secret: String,
+    device_code: String,
+    expires_in: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    session_timeout: Option<i64>,
+}
+
+async fn login(
+    form_param: web::Form<LoginFormParam>,
+    service: web::Data<ExchangeService>,
+    req: HttpRequest,
+) -> Result<HttpResponse, RestError> {
+    if let Some(secret) = req.headers().get(header::AUTHORIZATION) {
+        if let Some(pkey) = service.hmac_key.read().await.as_deref() {
+            if oidc::verify_secret(secret, pkey) {
+                if let Ok(s) = secret.to_str() {
+                    return Ok(HttpResponse::Ok().json(s));
+                }
+            }
+        }
+    }
+
+    let mut secret = oidc::verify_id_token(
+        &form_param.client_id,
+        &form_param.client_secret,
+        &form_param.device_code,
+        form_param.expires_in,
+        form_param.session_timeout,
+        &service.openid_user,
+    )
+    .await
+    .map_err(|e| RestError::Unknown(e.to_string()))?;
+
+    let pkey = service
+        .refresh_hmac_key()
+        .await
+        .map_err(|e| RestError::Unknown(e.to_string()))?;
+    let mut signer = Signer::new(MessageDigest::sha384(), &pkey)
+        .map_err(|e| RestError::Unknown(e.to_string()))?;
+    signer
+        .update(&secret)
+        .map_err(|e| RestError::Unknown(e.to_string()))?;
+    let mut hmac = signer
+        .sign_to_vec()
+        .map_err(|e| RestError::Unknown(e.to_string()))?;
+
+    secret.append(&mut hmac);
+
+    Ok(HttpResponse::Ok().json(data_encoding::HEXUPPER.encode(&secret)))
+}
+
+async fn logout(service: web::Data<ExchangeService>) -> Result<HttpResponse, RestError> {
+    service
+        .refresh_hmac_key()
+        .await
+        .map_err(|e| RestError::Unknown(e.to_string()))?;
+    Ok(HttpResponse::Ok().finish())
+}
+
+async fn verify_client<B>(
+    service: web::Data<ExchangeService>,
+    req: ServiceRequest,
+    next: Next<B>,
+) -> Result<ServiceResponse<B>, Error>
+where
+    B: MessageBody,
+{
+    if service.openid_user.is_none() {
+        return next.call(req).await;
+    }
+
+    if !req.path().ends_with("/login") {
+        let key = service.hmac_key.read().await;
+        let pkey = key
+            .as_deref()
+            .ok_or(error::ErrorUnauthorized(ERR_RESP_INVALID_SESSION))?;
+        let secret = req
+            .headers()
+            .get(header::AUTHORIZATION)
+            .ok_or(error::ErrorUnauthorized(ERR_RESP_INVALID_SESSION))?;
+        if !oidc::verify_secret(secret, pkey) {
+            return Err(error::ErrorUnauthorized(ERR_RESP_INVALID_SESSION));
+        }
+    }
+
+    next.call(req).await
+}
+
 async fn do_exchange<F>(
     command: u8,
     mut buf: Vec<u8>,
@@ -424,7 +529,7 @@ where
     let mut send_buf = (buf.len() as u32).to_ne_bytes().to_vec();
     send_buf.append(&mut buf);
 
-    let recv_buf = service
+    let recv_buf: Vec<u8> = service
         .do_exchange(&send_buf, path)
         .await
         .map_err(|e| RestError::Unknown(e.to_string()))?;
@@ -469,36 +574,72 @@ fn parse_bytes_to_strings(data: Vec<u8>) -> Vec<String> {
 
 struct ExchangeService {
     stream: Arc<Mutex<UnixStream>>,
+    hmac_key: RwLock<Option<PKey<Private>>>,
+    openid_user: Option<String>,
 }
 
 impl ExchangeService {
-    fn new(stream: UnixStream) -> Self {
+    fn new(stream: UnixStream, openid_user: Option<String>) -> Self {
         Self {
             stream: Arc::new(Mutex::new(stream)),
+            hmac_key: RwLock::new(None::<PKey<Private>>),
+            openid_user,
         }
     }
 
     async fn do_exchange(&self, buf: &[u8], path: Option<&Path>) -> Result<Vec<u8>> {
-        acond_io::write_async_lock(self.stream.clone(), buf, buf.len()).await?;
+        let ref_stream = self.stream.clone();
+        let mut stream = ref_stream.lock().await;
+        stream.write_all(buf).await?;
 
         if let Some(path) = path {
-            let ref_stream = self.stream.clone();
-            let stream = ref_stream.lock().await;
             let file = File::open(path).await?;
             stream.send_fd(file.as_raw_fd()).await?;
             unistd::close(file.as_raw_fd())?;
             unistd::unlink(path)?;
         }
 
-        acond_io::read_async_lock(self.stream.clone()).await
+        let mut buf = Vec::new();
+        let mut chunk = [0u8; utils::BUFF_SIZE];
+        loop {
+            match stream.read(&mut chunk).await {
+                Ok(n) => {
+                    buf.extend_from_slice(&chunk[..n]);
+                    if n < chunk.len() {
+                        break;
+                    }
+                }
+                Err(e) => return Err(e.into()),
+            }
+        }
+
+        Ok(buf)
+    }
+
+    async fn refresh_hmac_key(&self) -> Result<PKey<Private>> {
+        let mut key = [0; 128];
+        rand::rand_bytes(&mut key)?;
+        let pkey = PKey::hmac(&key)?;
+
+        let mut hmac_key = self.hmac_key.write().await;
+        *hmac_key = Some(pkey.clone());
+
+        Ok(pkey)
     }
 }
 
 pub async fn run_server(
     stream: StdUnixStream,
-    port: u32,
+    config: &Config,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let service = web::Data::new(ExchangeService::new(UnixStream::from_std(stream)?));
+    if let Some(proxy) = config.https_proxy.as_ref() {
+        env::set_var("https_proxy", proxy);
+    }
+
+    let service = web::Data::new(ExchangeService::new(
+        UnixStream::from_std(stream)?,
+        config.openid_user.clone(),
+    ));
 
     let ec_group = EcGroup::from_curve_name(Nid::SECP384R1)?;
     let ec_key = EcKey::generate(&ec_group)?;
@@ -529,6 +670,7 @@ pub async fn run_server(
     HttpServer::new(move || {
         App::new()
             .app_data(service.clone())
+            .wrap(from_fn(verify_client))
             .route("/api/v1/manifest", web::post().to(add_manifest))
             .route("/api/v1/manifest/finalize", web::post().to(finalize))
             .route(
@@ -544,8 +686,10 @@ pub async fn run_server(
             .route("/api/v1/container/{id}/inspect", web::get().to(inspect))
             .route("/api/v1/container/inspect", web::get().to(inspect))
             .route("/api/v1/container/report", web::get().to(report))
+            .route("/api/v1/oauth2/login", web::post().to(login))
+            .route("/api/v1/oauth2/logout", web::post().to(logout))
     })
-    .bind_openssl(format!("0.0.0.0:{}", port), {
+    .bind_openssl(format!("0.0.0.0:{}", config.tcp_port), {
         let mut builder = SslAcceptor::mozilla_intermediate(SslMethod::tls())?;
         builder.set_private_key(&pkey)?;
         builder.set_certificate(&x509)?;
