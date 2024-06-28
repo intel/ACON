@@ -1,7 +1,7 @@
 // Copyright (C) 2023 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::{image::AttestDataValue, io as acond_io, pod::Pod, report, utils};
+use crate::{image::AttestDataValue, pod::Pod, report, utils};
 use anyhow::{anyhow, Result};
 use std::{
     fs::{self, Permissions},
@@ -12,6 +12,7 @@ use std::{
     sync::Arc,
 };
 use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
     net::{UnixListener, UnixStream},
     sync::{mpsc, oneshot, watch, RwLock},
 };
@@ -145,44 +146,50 @@ fn error_to_vec(command: i32, err: &str) -> Vec<u8> {
     msg_err_bytes
 }
 
+async fn async_read_struct<R, S>(reader: &mut R) -> Result<(S, Vec<u8>)>
+where
+    R: AsyncReadExt + Unpin,
+    S: Copy,
+{
+    let mut buf = vec![0u8; mem::size_of::<S>()];
+    reader.read_exact(&mut buf).await?;
+
+    let (_, body, _) = unsafe { buf.align_to::<S>() };
+    Ok((body[0], buf))
+}
+
 async fn handle_request(mut stream: UnixStream, tx: mpsc::Sender<Request>) -> Result<()> {
-    let recv_buf =
-        match acond_io::read_async_struct::<UnixStream, AconMessageHdr>(&mut stream).await {
-            Ok((msg_hdr, mut msg_hdr_buf)) => {
-                let msg_size = msg_hdr.size as usize;
-                if msg_size > utils::MAX_BUFF_SIZE || msg_size < mem::size_of::<AconMessageHdr>() {
-                    utils::ERR_IPC_INVALID_REQUEST.as_bytes().to_vec();
-                }
+    let recv_buf = match async_read_struct::<UnixStream, AconMessageHdr>(&mut stream).await {
+        Ok((msg_hdr, mut msg_hdr_buf)) => {
+            let msg_size = msg_hdr.size as usize;
+            if msg_size > utils::MAX_BUFF_SIZE || msg_size < mem::size_of::<AconMessageHdr>() {
+                utils::ERR_IPC_INVALID_REQUEST.as_bytes().to_vec()
+            } else {
+                let mut msg_body_buf = vec![0; msg_size - mem::size_of::<AconMessageHdr>()];
+                if stream.read_exact(&mut msg_body_buf).await.is_err() {
+                    utils::ERR_IPC_INVALID_REQUEST.as_bytes().to_vec()
+                } else {
+                    let (resp_tx, resp_rx) = oneshot::channel();
+                    let mut buf = vec![];
+                    buf.append(&mut msg_hdr_buf);
+                    buf.append(&mut msg_body_buf);
 
-                match acond_io::read_async_with_size(
-                    &mut stream,
-                    msg_size - mem::size_of::<AconMessageHdr>(),
-                )
-                .await
-                {
-                    Ok(mut msg_body_buf) => {
-                        let (resp_tx, resp_rx) = oneshot::channel();
-                        let mut buf = vec![];
-                        buf.append(&mut msg_hdr_buf);
-                        buf.append(&mut msg_body_buf);
+                    let request = Request {
+                        command: msg_hdr.command,
+                        bytes: buf,
+                        uid: stream.peer_cred()?.uid(),
+                        resp_tx,
+                    };
 
-                        let request = Request {
-                            command: msg_hdr.command,
-                            bytes: buf,
-                            uid: stream.peer_cred()?.uid(),
-                            resp_tx,
-                        };
-
-                        let _ = tx.send(request).await;
-                        resp_rx.await?
-                    }
-                    Err(_) => utils::ERR_IPC_INVALID_REQUEST.as_bytes().to_vec(),
+                    let _ = tx.send(request).await;
+                    resp_rx.await?
                 }
             }
-            Err(_) => utils::ERR_IPC_INVALID_REQUEST.as_bytes().to_vec(),
-        };
+        }
+        Err(_) => utils::ERR_IPC_INVALID_REQUEST.as_bytes().to_vec(),
+    };
 
-    acond_io::write_async(&mut stream, &recv_buf, recv_buf.len()).await?;
+    stream.write_all(&recv_buf).await?;
     Ok(())
 }
 

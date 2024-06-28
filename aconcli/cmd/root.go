@@ -23,4 +23,5 @@ func init() {
 		&cobra.Group{"image", "ACON Image and Image Repo Commands:"},
 		&cobra.Group{"runtime", "ACON TD/VM and Container Commands:"})
 	rootCmd.PersistentFlags().StringVarP(&targetDir, "directory", "C", "", "change working directory before performing any operations")
+	rootCmd.PersistentFlags().BoolVar(&nologin, "nologin", false, "if set, login as an anonymous user")
 }

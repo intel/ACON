@@ -13,10 +13,11 @@ use nix::{
 };
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::HashMap, convert::TryInto, fs::File, mem, num::NonZeroUsize,
-    os::unix::io::FromRawFd, os::unix::net::UnixStream as StdUnixStream, slice, str, sync::Arc,
+    collections::HashMap, fs::File, mem, num::NonZeroUsize, os::unix::io::FromRawFd,
+    os::unix::net::UnixStream as StdUnixStream, slice, str, sync::Arc,
 };
 use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
     net::UnixStream,
     signal::unix as tokio_unix,
     sync::{mpsc, watch, RwLock},
@@ -31,7 +32,7 @@ use crate::{
     config::Config,
     container::{self, CStatus, Container},
     image::{Image, Manifest},
-    io as acond_io, ipc,
+    ipc,
     pod::Pod,
     report, utils,
 };
@@ -172,25 +173,12 @@ async fn start_service(
     let service = AconService { pod };
 
     loop {
-        let len_buf = acond_io::read_async_with_size(&mut stream, mem::size_of::<u32>()).await?;
-        if len_buf.len() != mem::size_of::<u32>() {
-            log::error!(
-                "The length of message header is incorrect. {} != 4",
-                len_buf.len()
-            );
-            continue;
-        }
-        let len_arry = len_buf.try_into().unwrap();
-        let len = u32::from_ne_bytes(len_arry) as usize;
-        let recv_buf = acond_io::read_async_with_size(&mut stream, len).await?;
-        if recv_buf.len() != len {
-            log::error!(
-                "The length of message body is incorrect. {} != {}",
-                recv_buf.len(),
-                len
-            );
-            continue;
-        }
+        let mut len_buf = [0; mem::size_of::<u32>()];
+        stream.read_exact(&mut len_buf).await?;
+
+        let len = u32::from_ne_bytes(len_buf);
+        let mut recv_buf = vec![0; len as usize];
+        stream.read_exact(&mut recv_buf).await?;
 
         let send_buf = match recv_buf.is_empty() {
             true => format_error(AcondError::unknown(utils::ERR_UNEXPECTED)),
@@ -200,7 +188,7 @@ async fn start_service(
             },
         };
 
-        acond_io::write_async(&mut stream, &send_buf, send_buf.len()).await?;
+        stream.write_all(&send_buf).await?;
     }
 }
 
