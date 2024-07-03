@@ -478,6 +478,14 @@ fn run_child(fork_args: &ForkArgs, slave: Option<i32>, csock: i32) -> Result<Pid
             fs::create_dir_all(&path)?;
             unistd::chown(&path, Some(Uid::from_raw(*key)), Some(Gid::from_raw(*key)))?;
         }
+
+        #[cfg(not(feature = "interactive"))]
+        {
+            let null_fd = fcntl::open("/dev/null", OFlag::O_WRONLY, Mode::empty())?;
+            unistd::dup2(null_fd, libc::STDOUT_FILENO)?;
+            unistd::dup2(null_fd, libc::STDERR_FILENO)?;
+            unistd::close(null_fd)?;
+        }
     }
 
     unistd::chroot(&rootfs)?;
