@@ -1674,8 +1674,7 @@ dependencies = [
  "p256",
  "p384",
  "rand",
-# remove it temporarily
-# "rsa",
+ "rsa",
  "serde",
  "serde-value",
  "serde_derive",
@@ -1691,9 +1690,9 @@ dependencies = [
 
 [[package]]
 name = "openssl"
-version = "0.10.66"
+version = "0.10.70"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9529f4786b70a3e8c61e11179af17ab6188ad8d0ded78c5529441ed39d4bd9c1"
+checksum = "61cfb4e166a8bb8c9b55c500bc2308550148ece889be90f609377e58140f42c6"
 dependencies = [
  "bitflags 2.4.1",
  "cfg-if",
@@ -1717,9 +1716,9 @@ dependencies = [
 
 [[package]]
 name = "openssl-sys"
-version = "0.9.103"
+version = "0.9.105"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7f9e8deee91df40a943c71b917e5874b951d32a802526c85721ce3b776c929d6"
+checksum = "8b22d5b84be05a8d6947c7cb71f7c849aa0f112acd4bf51c2a7c1c988ac0a9dc"
 dependencies = [
  "cc",
  "libc",
@@ -2145,26 +2144,25 @@ dependencies = [
  "windows-sys 0.52.0",
 ]
 
-#remove it temporarily
-#[[package]]
-#name = "rsa"
-#version = "0.9.6"
-#source = "registry+https://github.com/rust-lang/crates.io-index"
-#checksum = "5d0e5124fcb30e76a7e79bfee683a2746db83784b86289f6251b54b7950a0dfc"
-#dependencies = [
-# "const-oid",
-# "digest",
-# "num-bigint-dig",
-# "num-integer",
-# "num-traits",
-# "pkcs1",
-# "pkcs8",
-# "rand_core",
-# "signature",
-# "spki",
-# "subtle",
-# "zeroize",
-#]
+[[package]]
+name = "rsa"
+version = "0.9.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "47c75d7c5c6b673e58bf54d8544a9f432e3a925b0e80f7cd3602ab5c50c55519"
+dependencies = [
+ "const-oid",
+ "digest",
+ "num-bigint-dig",
+ "num-integer",
+ "num-traits",
+ "pkcs1",
+ "pkcs8",
+ "rand_core",
+ "signature",
+ "spki",
+ "subtle",
+ "zeroize",
+]
 
 [[package]]
 name = "rustc-demangle"
