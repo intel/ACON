@@ -1,4 +1,6 @@
- # ACON - Attested Containers
+# ACON - Attested Containers
+
+**NOTE**: This repo has been archived. The proposed event logging architecture has been adopted and implemented by [CNCF CoCo](https://www.cncf.io/projects/confidential-containers/) ([source code](https://github.com/confidential-containers/guest-components/tree/main/attestation-agent/attestation-agent/src/eventlog)).
 
 ACON is an open source architecture and solution to create and manage small, purpose-built, [Intel TDX][intel-tdx]-protected virtual machines (called Trust Domains, or TDs for short) for running container-like workloads. ACON aims at maximizing the security benefits of Intel TDX while retaining compatibility with existing applications/tools. It is designed and optimized for cloud native use cases (e.g., containers and *FaaS* (**F**unction **a**s **a** **S**ervice), etc.).
 
