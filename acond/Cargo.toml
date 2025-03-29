@@ -21,7 +21,7 @@ prctl = "1.0.0"
 nix = { version = "0.26.2", default-features = false, features = ["fs", "mman", "mount", "poll", "ioctl", "process", "reboot", "term", "sched", "socket", "user"] }
 libc = "0.2.121"
 anyhow = { version = "1.0.56", default-features = false }
-openssl = "0.10.66"
+openssl = "0.10.70"
 data-encoding = { version = "2.3.2", default-features = false, features = ["alloc"] }
 serde = { version = "1.0.126", default-features = false, features = ["derive"] }
 serde_json = { version = "1.0.64", default-features = false, features = ["alloc"] }
